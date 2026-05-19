@@ -1,8 +1,11 @@
 # KIRARI-GHCard-Cache
 
-KIRARI GitHub 卡片专用 Cloudflare Worker 缓存代理。它为 KIRARI 的 `::github` 与 `::githubfile` 卡片缓存 GitHub REST API 和头像资源，降低 GitHub rate limit 压力，并改善中国地区访问 GitHub API / 头像域名缓慢或不可达的问题。
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/markd3ng/KIRARI-GHCard-Cache)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmarkd3ng%2FKIRARI-GHCard-Cache)
 
-生产推荐部署为 **私有 Service Binding 模式**：
+KIRARI GitHub 卡片专用缓存代理。它为 KIRARI 的 `::github` 与 `::githubfile` 卡片代理 GitHub REST API 和头像资源，降低 GitHub rate limit 压力，并改善中国地区访问 GitHub API / 头像域名缓慢或不可达的问题。
+
+生产首选 Cloudflare **私有 Service Binding 模式**：
 
 ```text
 Browser -> KIRARI Pages /ghc/* -> Pages Function -> Service Binding -> private Worker -> GitHub API / KV / Cache API
@@ -20,11 +23,13 @@ Worker 默认关闭公网入口：
 ## 功能
 
 - 缓存 GitHub repo、contents、commits 和 avatar 请求。
-- L1 `caches.default` + L2 KV stale fallback。
+- Cloudflare 版：L1 `caches.default` + L2 KV stale fallback。
+- Vercel 免费版：同项目 `/ghc` Function + HTTP cache headers，可选 Runtime Cache。
 - 可选 `GITHUB_TOKEN` 提升 GitHub REST API 限额。
 - 可选 `ALLOWED_ORIGINS` 浏览器 Origin 白名单。
 - 可选 cron 预热目标。
 - 支持 KIRARI Pages `/ghc/*` 同源私有转发。
+- 支持 Vercel `/ghc/*` rewrite 到同项目 Function。
 - 支持 GitHub Actions 自动部署 Worker。
 
 ## API
@@ -52,6 +57,8 @@ GET /ghc/avatar/:owner?size=96
 Pages Function 会把 `/ghc/*` 转发为 Worker 内部的 `/api/github/*`。
 
 ## 快速开始
+
+Cloudflare Worker：
 
 ```bash
 pnpm install
@@ -81,6 +88,16 @@ pnpm wrangler secret put GITHUB_TOKEN
 ```bash
 pnpm deploy
 ```
+
+Vercel 免费版：
+
+```bash
+pnpm install
+pnpm type-check
+pnpm test
+```
+
+导入 Vercel 后，`vercel.json` 会把 `/ghc/*` rewrite 到 `/api/ghc/*`。生产建议在 Vercel 环境变量里配置 `GITHUB_TOKEN`。
 
 ## 配置
 
@@ -160,14 +177,19 @@ Zone: Zone Read   # 仅 custom domain / route 场景需要
 
 ## KIRARI 对接
 
-KIRARI 推荐配置：
+KIRARI 默认直连 GitHub。启用 Cloudflare 或 Vercel adapter 后使用：
 
 ```toml
 [githubCard]
 apiBase = "/ghc"
+
+[githubCard.adapter]
+enabled = true
+provider = "cloudflare" # or "vercel"
+route = "/ghc"
 ```
 
-KIRARI Pages 项目需要 Service Binding：
+Cloudflare Pages 项目需要 Service Binding：
 
 ```text
 binding: GHCARD_CACHE
@@ -194,7 +216,7 @@ service: kirari-ghcard-cache
 
 ### CORS 白名单是不是安全边界？
 
-不是。CORS 只约束浏览器调用。真正防滥用应使用 Cloudflare WAF / Rate Limiting。
+不是。CORS 只约束浏览器调用。免费版默认不依赖平台付费防护；如果公开部署，建议保持接口只支持固定 GitHub card 路由、配置 GitHub token，并观察请求量。
 
 ### 是否必须配置 GitHub Token？
 

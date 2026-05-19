@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm type-check",
+  "rewrites": [
+    {
+      "source": "/ghc",
+      "destination": "/api/ghc/healthz"
+    },
+    {
+      "source": "/ghc/:path*",
+      "destination": "/api/ghc/:path*"
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 # 部署指南
 
+本文件保留 Cloudflare Worker 主路径。免费版 Vercel 路径见 `docs/VERCEL_DEPLOYMENT.md`，Cloudflare 精简版说明见 `docs/CLOUDFLARE_DEPLOYMENT.md`。
+
 ## 安装
 
 ```bash

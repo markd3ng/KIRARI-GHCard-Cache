@@ -15,5 +15,5 @@
     "forceConsistentCasingInFileNames": true,
     "noEmit": true
   },
-  "include": ["src", "test", "worker-configuration.d.ts"]
+  "include": ["src", "api", "test", "worker-configuration.d.ts"]
 }
