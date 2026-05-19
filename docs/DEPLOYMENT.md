@@ -92,6 +92,8 @@ pnpm test
 wrangler deploy
 ```
 
+如果仓库还没有配置 `CLOUDFLARE_API_TOKEN`，Deploy 工作流会跳过 `wrangler deploy`，但仍保留前置检查。这适合刚初始化仓库或还没完成 Cloudflare 授权的阶段；配置 Secret 后无需修改 workflow，重新触发即可发布。
+
 ## KIRARI Pages Service Binding
 
 在 Cloudflare Dashboard 配置：

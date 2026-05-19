@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses Conventional Commits.
 
+## [Unreleased]
+
+### Fixed
+
+- Skip the Worker deploy step when `CLOUDFLARE_API_TOKEN` is not configured, while still running install, type-check, and tests.
+
 ## [0.1.0] - 2026-05-18
 
 ### Added

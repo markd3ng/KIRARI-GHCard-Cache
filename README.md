@@ -156,6 +156,8 @@ Zone: Zone Read   # 仅 custom domain / route 场景需要
 
 `GITHUB_TOKEN` 仍通过 Cloudflare Worker Secret 配置，不通过 GitHub Actions 明文传递。
 
+如果 `CLOUDFLARE_API_TOKEN` 尚未配置，Deploy 工作流仍会完成安装、类型检查和测试，但会跳过真正的 Worker 发布步骤，避免仓库初始化阶段出现无意义的红灯。配置该 Secret 后，下一次推送或手动触发会执行 `wrangler deploy`。
+
 ## KIRARI 对接
 
 KIRARI 推荐配置：
