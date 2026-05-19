@@ -65,19 +65,21 @@ pnpm wrangler secret put GITHUB_TOKEN
 需要在 GitHub 仓库 Secrets 配置：
 
 ```text
+CLOUDFLARE_ACCOUNT_ID
 CLOUDFLARE_API_TOKEN
 ```
 
 `CLOUDFLARE_API_TOKEN` 只用于 GitHub Actions 调用 Cloudflare API 执行 `wrangler deploy`，不要和运行时的 `GITHUB_TOKEN` 混用。
 
-Cloudflare API Token 最小权限建议：
+Cloudflare 当前推荐在 Dashboard 的 **Account API tokens → Create Token → Permission policies → Custom → Edit Cloudflare Workers** 创建 CI token，并尽量只授权到部署目标 account。
 
-```text
-Account: Workers Scripts Edit
-Account: Workers KV Storage Edit
-Account: Account Settings Read
-Zone: Zone Read   # 只有 custom domain / route 场景需要
-```
+权限建议：
+
+| 场景 | Dashboard 权限名 | API 权限名 | Scope | 是否必需 | 说明 |
+|------|------------------|------------|-------|----------|------|
+| GitHub Actions 执行 `wrangler deploy` | Edit Cloudflare Workers | Workers Scripts Write/Edit | Account | 必需 | Cloudflare 官方 GitHub Actions 文档推荐使用该预设。 |
+| 用同一个 token 创建/管理 KV namespace | Workers KV Storage Edit | Workers KV Storage Write/Edit | Account | 可选 | 仅当 CI 或脚本会运行 `wrangler kv namespace create` 时需要；本仓库 workflow 只 deploy，KV ID 预先写入 `wrangler.jsonc`。 |
+| 用同一个 token 管理 Worker routes/custom domain | Workers Routes Edit | Workers Routes Write/Edit | Zone | 可选 | 仅当同一个 token 要写入 zone-level Worker routes 时需要；默认 Service Binding 私有模式不需要。 |
 
 CI 会执行：
 
@@ -98,7 +100,7 @@ pnpm test
 wrangler deploy
 ```
 
-如果仓库还没有配置 `CLOUDFLARE_API_TOKEN`，Deploy 工作流会跳过 `wrangler deploy`，但仍保留前置检查。这适合刚初始化仓库或还没完成 Cloudflare 授权的阶段；配置 Secret 后无需修改 workflow，重新触发即可发布。
+如果仓库还没有配置 `CLOUDFLARE_API_TOKEN` 或 `CLOUDFLARE_ACCOUNT_ID`，Deploy 工作流会跳过 `wrangler deploy`，但仍保留前置检查。这适合刚初始化仓库或还没完成 Cloudflare 授权的阶段；两个 Secret 都配置后无需修改 workflow，重新触发即可发布。
 
 ## Token 配置对照
 
@@ -106,6 +108,7 @@ wrangler deploy
 |------|------|----------|
 | `GITHUB_TOKEN` | Worker 运行时请求 GitHub API，提高 GitHub rate limit | Cloudflare Worker Secret |
 | `CLOUDFLARE_API_TOKEN` | GitHub Actions 部署 Worker | GitHub Repository Secrets |
+| `CLOUDFLARE_ACCOUNT_ID` | GitHub Actions 指定 Cloudflare 部署账号 | GitHub Repository Secrets |
 
 ## KIRARI Pages Service Binding
 

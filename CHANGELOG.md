@@ -12,6 +12,10 @@ The format is based on Keep a Changelog, and this project uses Conventional Comm
 - Added Deploy to Cloudflare and Deploy with Vercel README badges.
 - Added Cloudflare and Vercel free-tier deployment documentation.
 
+### Changed
+
+- Reworked Cloudflare API token deployment docs to use current dashboard/API permission names in tables, and documented `CLOUDFLARE_ACCOUNT_ID` for GitHub Actions deploys.
+
 ### Fixed
 
 - Skip the Worker deploy step when `CLOUDFLARE_API_TOKEN` is not configured, while still running install, type-check, and tests.

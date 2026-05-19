@@ -127,6 +127,7 @@ pnpm test
 |------|------|----------|
 | `GITHUB_TOKEN` | 运行时访问 GitHub REST API，提高 rate limit | Cloudflare Worker Secret 或 Vercel Project Environment Variables |
 | `CLOUDFLARE_API_TOKEN` | GitHub Actions 部署 Cloudflare Worker | GitHub Repository Secrets |
+| `CLOUDFLARE_ACCOUNT_ID` | GitHub Actions 指定部署目标 Cloudflare account | GitHub Repository Secrets |
 
 Cloudflare Worker 配置 `GITHUB_TOKEN`：
 
@@ -168,23 +169,25 @@ X-Upstream-RateLimit-Reset: ...
 需要在 GitHub Secrets 配置：
 
 ```text
+CLOUDFLARE_ACCOUNT_ID
 CLOUDFLARE_API_TOKEN
 ```
 
-Cloudflare API Token 最小权限建议：
+Cloudflare 当前推荐在 Dashboard 的 **Account API tokens → Create Token → Permission policies → Custom → Edit Cloudflare Workers** 创建 CI token，并尽量只授权到部署目标 account。
 
-```text
-Account: Workers Scripts Edit
-Account: Workers KV Storage Edit
-Account: Account Settings Read
-Zone: Zone Read   # 仅 custom domain / route 场景需要
-```
+权限建议：
+
+| 场景 | Dashboard 权限名 | API 权限名 | Scope | 是否必需 | 说明 |
+|------|------------------|------------|-------|----------|------|
+| GitHub Actions 执行 `wrangler deploy` | Edit Cloudflare Workers | Workers Scripts Write/Edit | Account | 必需 | Cloudflare 官方 GitHub Actions 文档推荐使用该预设。 |
+| 用同一个 token 创建/管理 KV namespace | Workers KV Storage Edit | Workers KV Storage Write/Edit | Account | 可选 | 仅当 CI 或脚本会运行 `wrangler kv namespace create` 时需要；本仓库 workflow 只 deploy，KV ID 预先写入 `wrangler.jsonc`。 |
+| 用同一个 token 管理 Worker routes/custom domain | Workers Routes Edit | Workers Routes Write/Edit | Zone | 可选 | 仅当同一个 token 要写入 zone-level Worker routes 时需要；默认 Service Binding 私有模式不需要。 |
 
 注意：`CLOUDFLARE_API_TOKEN` 只给 GitHub Actions 用来执行 `wrangler deploy`。它不是 GitHub API token，也不会被 Worker/Vercel Function 用来请求 GitHub。
 
 如果部署 Cloudflare Worker，`GITHUB_TOKEN` 要配置在 Cloudflare Worker Secret；如果部署 Vercel，`GITHUB_TOKEN` 要配置在 Vercel Project Environment Variables。不要把真实 `GITHUB_TOKEN` 写进仓库或 workflow YAML。
 
-如果 `CLOUDFLARE_API_TOKEN` 尚未配置，Deploy 工作流仍会完成安装、类型检查和测试，但会跳过真正的 Worker 发布步骤，避免仓库初始化阶段出现无意义的红灯。配置该 Secret 后，下一次推送或手动触发会执行 `wrangler deploy`。
+如果 `CLOUDFLARE_API_TOKEN` 或 `CLOUDFLARE_ACCOUNT_ID` 尚未配置，Deploy 工作流仍会完成安装、类型检查和测试，但会跳过真正的 Worker 发布步骤，避免仓库初始化阶段出现无意义的红灯。两个 Secret 都配置后，下一次推送或手动触发会执行 `wrangler deploy`。
 
 ## KIRARI 对接
 

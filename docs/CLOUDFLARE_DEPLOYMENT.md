@@ -33,7 +33,22 @@ pnpm wrangler kv namespace create GITHUB_CACHE --preview
 pnpm wrangler secret put GITHUB_TOKEN
 ```
 
-如果使用 GitHub Actions 自动部署，还需要在 **GitHub Repository Secrets** 配置 `CLOUDFLARE_API_TOKEN`。它只负责部署权限，不会用于请求 GitHub API。
+如果使用 GitHub Actions 自动部署，还需要在 **GitHub Repository Secrets** 配置：
+
+```text
+CLOUDFLARE_ACCOUNT_ID
+CLOUDFLARE_API_TOKEN
+```
+
+`CLOUDFLARE_API_TOKEN` 只负责部署权限，不会用于请求 GitHub API。Cloudflare 当前推荐在 Dashboard 的 **Account API tokens → Create Token → Permission policies → Custom → Edit Cloudflare Workers** 创建 CI token。
+
+权限建议：
+
+| 场景 | Dashboard 权限名 | API 权限名 | Scope | 是否必需 | 说明 |
+|------|------------------|------------|-------|----------|------|
+| GitHub Actions 执行 `wrangler deploy` | Edit Cloudflare Workers | Workers Scripts Write/Edit | Account | 必需 | 官方 GitHub Actions 文档推荐使用该预设。 |
+| 创建/管理 KV namespace | Workers KV Storage Edit | Workers KV Storage Write/Edit | Account | 可选 | 仅当 CI 或脚本会创建 KV 时需要。 |
+| 管理 Worker routes/custom domain | Workers Routes Edit | Workers Routes Write/Edit | Zone | 可选 | 默认 Service Binding 私有模式不需要。 |
 
 部署：
 
