@@ -60,6 +60,14 @@ pnpm wrangler kv namespace create GITHUB_CACHE --preview
 ]
 ```
 
+部署前运行配置检查：
+
+```bash
+pnpm cf:config-check
+```
+
+如果 `wrangler.jsonc` 仍包含 `<production-kv-id>` 或 `<preview-kv-id>`，说明还没有把真实 KV namespace ID 写入配置。GitHub Actions 会在 deploy step 前执行同一个检查，避免 Cloudflare API 返回 `KV namespace '<production-kv-id>' is not valid` 这种不直观的错误。
+
 ## Step 3. 配置运行时 Secret
 
 `GITHUB_TOKEN` 非必需，但生产推荐配置。它是部署后的 Worker 请求 GitHub REST API 时使用的 token。
@@ -86,8 +94,19 @@ pnpm wrangler secret put GITHUB_TOKEN
 |--------------------------|----------|------|
 | `CLOUDFLARE_ACCOUNT_ID` | 是 | 指定 Wrangler 部署到哪个 Cloudflare account |
 | `CLOUDFLARE_API_TOKEN` | 是 | 让 GitHub Actions 中的 Wrangler 通过 Cloudflare API 部署 |
+| `CLOUDFLARE_KV_NAMESPACE_ID` | 推荐 | CI 部署前临时写入 `wrangler.jsonc` 的生产 KV namespace ID |
+| `CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID` | 推荐 | CI 部署前临时写入 `wrangler.jsonc` 的 preview KV namespace ID |
 
 如果任意一个缺失，deploy workflow 仍会执行 install、type-check 和 test，然后跳过 `wrangler deploy`。
+
+KV namespace ID 有两种配置方式：
+
+| 方式 | 适合场景 | 说明 |
+|------|----------|------|
+| 直接替换 `wrangler.jsonc` | 个人部署，接受把资源 ID 提交进仓库 | 把 `<production-kv-id>` 和 `<preview-kv-id>` 替换成真实 ID |
+| GitHub Repository Secrets | 不想把账号资源 ID 提交进仓库 | 设置 `CLOUDFLARE_KV_NAMESPACE_ID` 和 `CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID`，workflow 会在 deploy 前临时注入 |
+
+如果两种方式都没配置，`pnpm cf:config-check` 会在 deploy 前失败，并提示先创建 KV namespace。
 
 在 Cloudflare Dashboard 创建 API token：
 

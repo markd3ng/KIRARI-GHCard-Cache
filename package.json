@@ -8,6 +8,8 @@
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "cf:prepare-config": "node scripts/prepare-cloudflare-config.mjs",
+    "cf:config-check": "node scripts/check-cloudflare-config.mjs",
     "cf:types": "wrangler types",
     "cf:check": "wrangler deploy --dry-run",
     "deploy:dry": "wrangler deploy --dry-run",

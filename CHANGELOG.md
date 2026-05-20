@@ -8,6 +8,7 @@ The format is based on Keep a Changelog, and this project uses Conventional Comm
 
 ### Added
 
+- Added Cloudflare config prepare/check scripts so GitHub Actions can inject KV namespace IDs from secrets and fail clearly before deploy when placeholders remain.
 - Added a Vercel free-tier `/ghc/*` Function path with HTTP cache headers and optional Runtime Cache probing.
 - Added Deploy to Cloudflare and Deploy with Vercel README badges.
 - Added Cloudflare and Vercel free-tier deployment documentation.

@@ -18,6 +18,8 @@
 | `GITHUB_TOKEN` | 缓存代理运行时 | Cloudflare Worker Secret 或 Vercel Project Environment Variables | GitHub Actions YAML、`kirari.config.toml`、任何提交到仓库的文件 | 提高 GitHub REST API rate limit |
 | `CLOUDFLARE_ACCOUNT_ID` | GitHub Actions 部署任务 | GitHub Repository Secrets | Cloudflare Worker Secret、Vercel、`kirari.config.toml` | 指定 `wrangler deploy` 的 Cloudflare account |
 | `CLOUDFLARE_API_TOKEN` | GitHub Actions 部署任务 | GitHub Repository Secrets | Cloudflare Worker Secret、Vercel、`kirari.config.toml` | 让 CI 中的 Wrangler 调用 Cloudflare API |
+| `CLOUDFLARE_KV_NAMESPACE_ID` | GitHub Actions 部署任务 | GitHub Repository Secrets | Cloudflare Worker Secret、Vercel、`kirari.config.toml` | CI deploy 前临时注入生产 KV namespace ID |
+| `CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID` | GitHub Actions 部署任务 | GitHub Repository Secrets | Cloudflare Worker Secret、Vercel、`kirari.config.toml` | CI deploy 前临时注入 preview KV namespace ID |
 | `ALLOWED_ORIGINS` | Cloudflare Worker CORS | `wrangler.jsonc` vars 或 Cloudflare Worker 环境变量 | KIRARI 配置 | 浏览器 Origin 白名单 |
 | `GHC_ALLOWED_ORIGINS` | Vercel Function CORS | Vercel Project Environment Variables | Cloudflare Worker Secret | Vercel 专用 Origin 白名单 |
 | `PUBLIC_BASE_URL` | Cloudflare cron prewarm | `wrangler.jsonc` vars | KIRARI 配置 | 预热时改写头像 URL 的公开 API base |
@@ -28,11 +30,13 @@
 1. 安装依赖。
 2. 创建生产和 preview Workers KV namespace。
 3. 将 KV ID 写入 `wrangler.jsonc`。
-4. 可选：把运行时 `GITHUB_TOKEN` 配成 Cloudflare Worker Secret。
-5. 可选：如果要用 GitHub Actions 部署，配置 `CLOUDFLARE_ACCOUNT_ID` 和 `CLOUDFLARE_API_TOKEN`。
-6. 部署 Worker。
-7. 在 KIRARI Cloudflare Pages 项目中绑定 `GHCARD_CACHE` Service Binding。
-8. KIRARI 设置 `githubCard.apiBase = "/ghc"` 并启用 Cloudflare adapter。
+4. 将 KV ID 写入 `wrangler.jsonc`，或配置 `CLOUDFLARE_KV_NAMESPACE_ID` / `CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID` GitHub Secrets 让 CI 临时注入。
+5. 运行 `pnpm cf:config-check`，确认 `wrangler.jsonc` 不再包含 KV ID 占位符。
+6. 可选：把运行时 `GITHUB_TOKEN` 配成 Cloudflare Worker Secret。
+7. 可选：如果要用 GitHub Actions 部署，配置 `CLOUDFLARE_ACCOUNT_ID` 和 `CLOUDFLARE_API_TOKEN`。
+8. 部署 Worker。
+9. 在 KIRARI Cloudflare Pages 项目中绑定 `GHCARD_CACHE` Service Binding。
+10. KIRARI 设置 `githubCard.apiBase = "/ghc"` 并启用 Cloudflare adapter。
 
 完整步骤见 [Cloudflare 部署](CLOUDFLARE_DEPLOYMENT.md)。
 
@@ -71,6 +75,7 @@ Cloudflare 路径：
 ```bash
 pnpm install
 pnpm cf:types
+pnpm cf:config-check
 pnpm type-check
 pnpm test
 pnpm deploy:dry

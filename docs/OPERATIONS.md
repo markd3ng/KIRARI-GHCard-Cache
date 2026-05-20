@@ -108,6 +108,7 @@ provider = "none"
 | 头像仍指向 GitHub | public base header 或 URL rewrite 未生效 | 响应 JSON 的 `owner.avatar_url` | 检查 KIRARI 生成 route 和 `X-KIRARI-GHC-PUBLIC-BASE` |
 | GitHub rate limit 错误仍出现 | 运行时 `GITHUB_TOKEN` 缺失或无效 | 运行时平台 secret/env | 在对应运行时平台重新配置 `GITHUB_TOKEN` |
 | GitHub Actions deploy 被跳过 | 缺少 `CLOUDFLARE_ACCOUNT_ID` 或 `CLOUDFLARE_API_TOKEN` | GitHub Repository Secrets | 添加两个 secrets |
+| Deploy 报 `KV namespace '<production-kv-id>' is not valid` | `wrangler.jsonc` 仍使用占位符 KV ID | `wrangler.jsonc` 的 `kv_namespaces` 和 GitHub Secrets | 创建真实 KV namespace，替换 `id` / `preview_id`，或配置 `CLOUDFLARE_KV_NAMESPACE_ID` / `CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID` |
 | Vercel 在 GitHub 故障时没有 stale fallback | Runtime Cache 不可用 | `X-Cache` header | 需要持久 stale fallback 时使用 Cloudflare 路径 |
 
 ## 日志命令
@@ -123,5 +124,7 @@ pnpm wrangler tail
 ```bash
 pnpm type-check
 pnpm test
+pnpm cf:prepare-config
+pnpm cf:config-check
 pnpm deploy:dry
 ```

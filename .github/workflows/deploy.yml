@@ -24,6 +24,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm type-check
       - run: pnpm test
+      - run: pnpm cf:prepare-config
+        if: ${{ env.HAS_CLOUDFLARE_API_TOKEN == 'true' && env.HAS_CLOUDFLARE_ACCOUNT_ID == 'true' }}
+        env:
+          CLOUDFLARE_KV_NAMESPACE_ID: ${{ secrets.CLOUDFLARE_KV_NAMESPACE_ID }}
+          CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID: ${{ secrets.CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID }}
+      - run: pnpm cf:config-check
+        if: ${{ env.HAS_CLOUDFLARE_API_TOKEN == 'true' && env.HAS_CLOUDFLARE_ACCOUNT_ID == 'true' }}
       - name: Deploy Worker
         if: ${{ env.HAS_CLOUDFLARE_API_TOKEN == 'true' && env.HAS_CLOUDFLARE_ACCOUNT_ID == 'true' }}
         uses: cloudflare/wrangler-action@v3

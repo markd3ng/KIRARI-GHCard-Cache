@@ -140,8 +140,19 @@ serviceBinding = "GHCARD_CACHE"
 |--------|---------------------------|----------|------|
 | `CLOUDFLARE_ACCOUNT_ID` | 需要 | GitHub Repository Secrets | 指定 Wrangler 部署到哪个 Cloudflare account |
 | `CLOUDFLARE_API_TOKEN` | 需要 | GitHub Repository Secrets | 让 CI 中的 Wrangler 通过 Cloudflare API 部署 |
+| `CLOUDFLARE_KV_NAMESPACE_ID` | 推荐 | GitHub Repository Secrets | CI 部署前临时写入 `wrangler.jsonc` 的生产 KV namespace ID |
+| `CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID` | 推荐 | GitHub Repository Secrets | CI 部署前临时写入 `wrangler.jsonc` 的 preview KV namespace ID |
 
 如果其中任意一个缺失，Deploy workflow 仍会执行 install、type-check 和 test，然后跳过 `wrangler deploy`。
+
+KV namespace ID 可以二选一配置：
+
+| 方式 | 适合场景 | 说明 |
+|------|----------|------|
+| 写入 `wrangler.jsonc` | 个人项目直接部署 | 把 `<production-kv-id>` 和 `<preview-kv-id>` 替换成真实 ID 并提交 |
+| GitHub Secrets | 不想把账号资源 ID 提交进仓库 | 配置 `CLOUDFLARE_KV_NAMESPACE_ID` 和 `CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID`，workflow 会在 deploy 前临时注入 |
+
+如果两种方式都没有配置，`pnpm cf:config-check` 会在 deploy 前失败，并提示先创建 KV namespace。
 
 Cloudflare API token 权限表：
 
@@ -183,6 +194,15 @@ pnpm wrangler kv namespace create GITHUB_CACHE --preview
   }
 ]
 ```
+
+部署前检查 `wrangler.jsonc` 是否仍然包含占位符：
+
+```bash
+pnpm cf:prepare-config # optional: inject IDs from env vars in CI
+pnpm cf:config-check
+```
+
+如果 `id` 仍是 `<production-kv-id>` 或 `preview_id` 仍是 `<preview-kv-id>`，GitHub Actions 会在真正调用 `wrangler deploy` 前失败，并提示先替换为真实 KV namespace ID。
 
 配置可选 GitHub API token：
 
