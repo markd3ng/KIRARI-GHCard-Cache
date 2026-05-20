@@ -33,7 +33,11 @@ describe("handleVercelRequest", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("X-Cache")).toBe("MISS");
-    expect(response.headers.get("Cache-Control")).toContain("s-maxage=21600");
+    const cacheControl = response.headers.get("Cache-Control") ?? "";
+    const freshTtl = Number(cacheControl.match(/s-maxage=(\d+)/)?.[1]);
+    expect(freshTtl).toBeGreaterThanOrEqual(21_599);
+    expect(freshTtl).toBeLessThanOrEqual(21_600);
+    expect(cacheControl).toContain("stale-while-revalidate=604800");
     expect(body.owner.avatar_url).toBe("https://cache.test/ghc/avatar/saicaca?size=96");
     expect(fetchMock.mock.calls[0]?.[0]).toEqual(new URL("https://api.github.com/repos/saicaca/fuwari"));
 
