@@ -3,31 +3,23 @@ import { readFileSync } from "node:fs";
 const configPath = new URL("../wrangler.jsonc", import.meta.url);
 const configText = readFileSync(configPath, "utf8");
 
-const placeholderPattern = /<[^>]+>/;
-const kvIdPattern = /"id"\s*:\s*"([^"]+)"/;
-const previewKvIdPattern = /"preview_id"\s*:\s*"([^"]+)"/;
+const kvId = configText.match(/"id"\s*:\s*"([^"]+)"/)?.[1] ?? "";
 
-const kvId = configText.match(kvIdPattern)?.[1] ?? "";
-const previewKvId = configText.match(previewKvIdPattern)?.[1] ?? "";
-const invalidValues = [
-  ["id", kvId],
-  ["preview_id", previewKvId],
-].filter(([, value]) => !value || placeholderPattern.test(value));
-
-if (invalidValues.length > 0) {
+if (!kvId || /^<[^>]+>$/.test(kvId)) {
   console.error("[cloudflare-config] Invalid Workers KV namespace configuration.");
   console.error("");
-  console.error("wrangler.jsonc still contains placeholder KV namespace IDs:");
-  for (const [field, value] of invalidValues) {
-    console.error(`- kv_namespaces[0].${field}: ${value || "<missing>"}`);
-  }
+  console.error(`wrangler.jsonc still contains a placeholder KV namespace id: ${kvId || "<missing>"}`);
   console.error("");
-  console.error("Create real KV namespaces and replace the placeholders before deploying:");
-  console.error("  pnpm wrangler kv namespace create GITHUB_CACHE");
-  console.error("  pnpm wrangler kv namespace create GITHUB_CACHE --preview");
+  console.error("For GitHub Actions one-click deploy, set only these repository secrets:");
+  console.error("  CLOUDFLARE_ACCOUNT_ID");
+  console.error("  CLOUDFLARE_API_TOKEN");
   console.error("");
-  console.error("Then copy the returned id and preview_id into wrangler.jsonc.");
+  console.error("The deploy workflow runs pnpm cf:prepare-config before this check.");
+  console.error("That step creates or reuses the GITHUB_CACHE KV namespace and injects its id into wrangler.jsonc.");
+  console.error("");
+  console.error("For manual deploy, either run pnpm cf:prepare-config with Cloudflare credentials in the environment,");
+  console.error("or replace <production-kv-id> in wrangler.jsonc yourself.");
   process.exit(1);
 }
 
-console.log("[cloudflare-config] Cloudflare KV namespace IDs are configured.");
+console.log(`[cloudflare-config] Cloudflare KV namespace id is configured: ${kvId}`);

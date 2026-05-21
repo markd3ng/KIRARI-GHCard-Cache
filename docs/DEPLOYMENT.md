@@ -18,8 +18,9 @@
 | `GITHUB_TOKEN` | 缓存代理运行时 | Cloudflare Worker Secret 或 Vercel Project Environment Variables | GitHub Actions YAML、`kirari.config.toml`、任何提交到仓库的文件 | 提高 GitHub REST API rate limit |
 | `CLOUDFLARE_ACCOUNT_ID` | GitHub Actions 部署任务 | GitHub Repository Secrets | Cloudflare Worker Secret、Vercel、`kirari.config.toml` | 指定 `wrangler deploy` 的 Cloudflare account |
 | `CLOUDFLARE_API_TOKEN` | GitHub Actions 部署任务 | GitHub Repository Secrets | Cloudflare Worker Secret、Vercel、`kirari.config.toml` | 让 CI 中的 Wrangler 调用 Cloudflare API |
-| `CLOUDFLARE_KV_NAMESPACE_ID` | GitHub Actions 部署任务 | GitHub Repository Secrets | Cloudflare Worker Secret、Vercel、`kirari.config.toml` | CI deploy 前临时注入生产 KV namespace ID |
-| `CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID` | GitHub Actions 部署任务 | GitHub Repository Secrets | Cloudflare Worker Secret、Vercel、`kirari.config.toml` | CI deploy 前临时注入 preview KV namespace ID |
+| `VERCEL_TOKEN` | GitHub Actions 部署任务 | GitHub Repository Secrets | Cloudflare、`kirari.config.toml` | 让 CI 中的 Vercel CLI 部署到 Vercel |
+| `VERCEL_ORG_ID` | GitHub Actions 部署任务 | GitHub Repository Secrets | Cloudflare、`kirari.config.toml` | 可选，指定已有 Vercel team/user scope |
+| `VERCEL_PROJECT_ID` | GitHub Actions 部署任务 | GitHub Repository Secrets | Cloudflare、`kirari.config.toml` | 可选，指定已有 Vercel project |
 | `ALLOWED_ORIGINS` | Cloudflare Worker CORS | `wrangler.jsonc` vars 或 Cloudflare Worker 环境变量 | KIRARI 配置 | 浏览器 Origin 白名单 |
 | `GHC_ALLOWED_ORIGINS` | Vercel Function CORS | Vercel Project Environment Variables | Cloudflare Worker Secret | Vercel 专用 Origin 白名单 |
 | `PUBLIC_BASE_URL` | Cloudflare cron prewarm | `wrangler.jsonc` vars | KIRARI 配置 | 预热时改写头像 URL 的公开 API base |
@@ -28,15 +29,13 @@
 ## Cloudflare 部署摘要
 
 1. 安装依赖。
-2. 创建生产和 preview Workers KV namespace。
-3. 将 KV ID 写入 `wrangler.jsonc`。
-4. 将 KV ID 写入 `wrangler.jsonc`，或配置 `CLOUDFLARE_KV_NAMESPACE_ID` / `CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID` GitHub Secrets 让 CI 临时注入。
-5. 运行 `pnpm cf:config-check`，确认 `wrangler.jsonc` 不再包含 KV ID 占位符。
-6. 可选：把运行时 `GITHUB_TOKEN` 配成 Cloudflare Worker Secret。
-7. 可选：如果要用 GitHub Actions 部署，配置 `CLOUDFLARE_ACCOUNT_ID` 和 `CLOUDFLARE_API_TOKEN`。
-8. 部署 Worker。
-9. 在 KIRARI Cloudflare Pages 项目中绑定 `GHCARD_CACHE` Service Binding。
-10. KIRARI 设置 `githubCard.apiBase = "/ghc"` 并启用 Cloudflare adapter。
+2. 配置 `CLOUDFLARE_ACCOUNT_ID` 和 `CLOUDFLARE_API_TOKEN` GitHub Secrets。
+3. GitHub Actions 会自动创建或复用 `GITHUB_CACHE` Workers KV namespace。
+4. GitHub Actions 会自动运行 `pnpm cf:prepare-config` 和 `pnpm cf:config-check`，确认 `wrangler.jsonc` 不再包含 KV ID 占位符。
+5. 可选：把运行时 `GITHUB_TOKEN` 配成 Cloudflare Worker Secret。
+6. 部署 Worker。
+7. 在 KIRARI Cloudflare Pages 项目中绑定 `GHCARD_CACHE` Service Binding。
+8. KIRARI 设置 `githubCard.apiBase = "/ghc"` 并启用 Cloudflare adapter。
 
 完整步骤见 [Cloudflare 部署](CLOUDFLARE_DEPLOYMENT.md)。
 
@@ -63,7 +62,7 @@
 | 场景 | Dashboard 选择项 | API permissions reference 名称 | Scope | 是否必需 |
 |------|------------------|--------------------------------|-------|----------|
 | GitHub Actions 执行 `wrangler deploy` | Edit Cloudflare Workers / Workers Scripts Edit | Workers Scripts Write | Account | 必需 |
-| 同一个 token 创建或管理 KV namespace | Workers KV Storage Edit | Workers KV Storage Write | Account | 可选 |
+| GitHub Actions 自动创建或复用 `GITHUB_CACHE` KV namespace | Workers KV Storage Edit | Workers KV Storage Write | Account | 必需 |
 | 同一个 token 管理 Worker routes 或 custom domain routes | Workers Routes Edit | Workers Routes Write | Zone | 可选 |
 
 默认私有 Service Binding 方案不需要 zone-level route，也不需要 Worker custom domain。

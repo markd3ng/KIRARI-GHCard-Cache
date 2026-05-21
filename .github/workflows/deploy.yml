@@ -27,8 +27,8 @@ jobs:
       - run: pnpm cf:prepare-config
         if: ${{ env.HAS_CLOUDFLARE_API_TOKEN == 'true' && env.HAS_CLOUDFLARE_ACCOUNT_ID == 'true' }}
         env:
-          CLOUDFLARE_KV_NAMESPACE_ID: ${{ secrets.CLOUDFLARE_KV_NAMESPACE_ID }}
-          CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID: ${{ secrets.CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - run: pnpm cf:config-check
         if: ${{ env.HAS_CLOUDFLARE_API_TOKEN == 'true' && env.HAS_CLOUDFLARE_ACCOUNT_ID == 'true' }}
       - name: Deploy Worker

@@ -18,8 +18,7 @@
   "kv_namespaces": [
     {
       "binding": "GITHUB_CACHE",
-      "id": "<production-kv-id>",
-      "preview_id": "<preview-kv-id>"
+      "id": "<production-kv-id>"
     }
   ],
   "triggers": {

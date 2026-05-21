@@ -1,0 +1,33 @@
+name: Deploy Vercel
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      HAS_VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN != '' }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm type-check
+      - run: pnpm test
+      - name: Deploy to Vercel
+        if: ${{ env.HAS_VERCEL_TOKEN == 'true' }}
+        run: pnpm dlx vercel@latest deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Skip deploy
+        if: ${{ env.HAS_VERCEL_TOKEN != 'true' }}
+        run: echo "VERCEL_TOKEN is not configured; skipping Vercel deploy."

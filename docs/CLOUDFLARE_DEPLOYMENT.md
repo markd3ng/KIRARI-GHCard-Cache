@@ -39,34 +39,35 @@ pnpm test
 pnpm deploy:dry
 ```
 
-## Step 2. 创建 Workers KV Namespace
+## Step 2. 配置 Workers KV Namespace
 
-创建生产和 preview namespace：
+GitHub Actions 一键部署时不需要手动填写 KV ID。workflow 会自动查找名为 `GITHUB_CACHE` 的 Workers KV namespace；如果不存在，会自动创建，并把真实 ID 临时注入 `wrangler.jsonc`。
+
+如果你要本地手动部署，可以自己创建 namespace：
 
 ```bash
 pnpm wrangler kv namespace create GITHUB_CACHE
-pnpm wrangler kv namespace create GITHUB_CACHE --preview
 ```
 
-把返回的 ID 写入 `wrangler.jsonc`：
+然后把返回的 ID 写入 `wrangler.jsonc`：
 
 ```jsonc
 "kv_namespaces": [
   {
     "binding": "GITHUB_CACHE",
-    "id": "<production-kv-id>",
-    "preview_id": "<preview-kv-id>"
+    "id": "<production-kv-id>"
   }
 ]
 ```
 
-部署前运行配置检查：
+本地手动部署前运行配置检查：
 
 ```bash
+pnpm cf:prepare-config
 pnpm cf:config-check
 ```
 
-如果 `wrangler.jsonc` 仍包含 `<production-kv-id>` 或 `<preview-kv-id>`，说明还没有把真实 KV namespace ID 写入配置。GitHub Actions 会在 deploy step 前执行同一个检查，避免 Cloudflare API 返回 `KV namespace '<production-kv-id>' is not valid` 这种不直观的错误。
+如果 `wrangler.jsonc` 仍包含 `<production-kv-id>`，说明还没有把真实 KV namespace ID 写入配置。GitHub Actions 会在 deploy step 前执行同一个检查，避免 Cloudflare API 返回 `KV namespace '<production-kv-id>' is not valid` 这种不直观的错误。
 
 ## Step 3. 配置运行时 Secret
 
@@ -94,19 +95,10 @@ pnpm wrangler secret put GITHUB_TOKEN
 |--------------------------|----------|------|
 | `CLOUDFLARE_ACCOUNT_ID` | 是 | 指定 Wrangler 部署到哪个 Cloudflare account |
 | `CLOUDFLARE_API_TOKEN` | 是 | 让 GitHub Actions 中的 Wrangler 通过 Cloudflare API 部署 |
-| `CLOUDFLARE_KV_NAMESPACE_ID` | 推荐 | CI 部署前临时写入 `wrangler.jsonc` 的生产 KV namespace ID |
-| `CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID` | 推荐 | CI 部署前临时写入 `wrangler.jsonc` 的 preview KV namespace ID |
 
 如果任意一个缺失，deploy workflow 仍会执行 install、type-check 和 test，然后跳过 `wrangler deploy`。
 
-KV namespace ID 有两种配置方式：
-
-| 方式 | 适合场景 | 说明 |
-|------|----------|------|
-| 直接替换 `wrangler.jsonc` | 个人部署，接受把资源 ID 提交进仓库 | 把 `<production-kv-id>` 和 `<preview-kv-id>` 替换成真实 ID |
-| GitHub Repository Secrets | 不想把账号资源 ID 提交进仓库 | 设置 `CLOUDFLARE_KV_NAMESPACE_ID` 和 `CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID`，workflow 会在 deploy 前临时注入 |
-
-如果两种方式都没配置，`pnpm cf:config-check` 会在 deploy 前失败，并提示先创建 KV namespace。
+不需要配置 KV namespace ID secret。workflow 会自动创建或复用 `GITHUB_CACHE`。
 
 在 Cloudflare Dashboard 创建 API token：
 
@@ -115,7 +107,8 @@ Account API tokens
 -> Create Token
 -> Permission policies
 -> Custom
--> Edit Cloudflare Workers
+-> Add Edit Cloudflare Workers
+-> Add Workers KV Storage Edit
 ```
 
 权限建议：
@@ -123,10 +116,10 @@ Account API tokens
 | 场景 | Dashboard 选择项 | API permissions reference 名称 | Scope | 是否必需 |
 |------|------------------|--------------------------------|-------|----------|
 | GitHub Actions 部署本 Worker | Edit Cloudflare Workers / Workers Scripts Edit | Workers Scripts Write | Account | 必需 |
-| 同一个 token 创建或管理 KV namespace | Workers KV Storage Edit | Workers KV Storage Write | Account | 可选 |
+| GitHub Actions 自动创建或复用 `GITHUB_CACHE` KV namespace | Workers KV Storage Edit | Workers KV Storage Write | Account | 必需 |
 | 同一个 token 管理 Worker routes 或 custom domain routes | Workers Routes Edit | Workers Routes Write | Zone | 可选 |
 
-本仓库默认 workflow 只需要 account scope 的 `Edit Cloudflare Workers` / `Workers Scripts Write`。KV namespace 通常在部署前手动创建，所以 deploy workflow 不需要 KV edit 权限。
+本仓库默认 workflow 会自动创建或复用 `GITHUB_CACHE`，所以 `CLOUDFLARE_API_TOKEN` 需要 account scope 的 `Edit Cloudflare Workers` / `Workers Scripts Write` 以及 `Workers KV Storage Write`。
 
 ## Step 5. 部署 Worker
 
@@ -140,7 +133,7 @@ GitHub Actions 部署：
 
 1. 在 GitHub Repository Secrets 添加 `CLOUDFLARE_ACCOUNT_ID` 和 `CLOUDFLARE_API_TOKEN`。
 2. push 到 `main`，或手动运行 `Deploy Worker` workflow。
-3. 确认 deploy step 没有被跳过。
+3. workflow 会自动确保 `GITHUB_CACHE` 存在，然后执行 deploy。
 
 ## Step 6. 绑定到 KIRARI Pages
 

@@ -48,6 +48,18 @@ Function 入口：
 api/ghc/[...path].ts
 ```
 
+## GitHub Actions 部署
+
+仓库包含 `Deploy Vercel` workflow。配置 GitHub Repository Secrets 后，push 到 `main` 或手动触发 workflow 即可部署。
+
+| Secret | 是否必需 | 用途 |
+|--------|----------|------|
+| `VERCEL_TOKEN` | 需要 | 允许 GitHub Actions 调用 Vercel CLI 部署 |
+| `VERCEL_ORG_ID` | 可选 | 指定已有 Vercel team/user scope |
+| `VERCEL_PROJECT_ID` | 可选 | 指定已有 Vercel project |
+
+未配置 `VERCEL_TOKEN` 时，workflow 仍会执行 install、type-check 和 test，然后跳过 deploy。
+
 ## 环境变量
 
 在这里配置：

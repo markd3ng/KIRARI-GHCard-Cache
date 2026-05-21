@@ -134,32 +134,23 @@ serviceBinding = "GHCARD_CACHE"
 
 ### Cloudflare GitHub Actions Secrets
 
-下面两个 Secret 只用于 GitHub Actions 部署 Worker：
+下面两个 Secret 用于 GitHub Actions 一键部署 Worker：
 
 | Secret | deploy workflow 是否需要 | 配置位置 | 用途 |
 |--------|---------------------------|----------|------|
 | `CLOUDFLARE_ACCOUNT_ID` | 需要 | GitHub Repository Secrets | 指定 Wrangler 部署到哪个 Cloudflare account |
 | `CLOUDFLARE_API_TOKEN` | 需要 | GitHub Repository Secrets | 让 CI 中的 Wrangler 通过 Cloudflare API 部署 |
-| `CLOUDFLARE_KV_NAMESPACE_ID` | 推荐 | GitHub Repository Secrets | CI 部署前临时写入 `wrangler.jsonc` 的生产 KV namespace ID |
-| `CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID` | 推荐 | GitHub Repository Secrets | CI 部署前临时写入 `wrangler.jsonc` 的 preview KV namespace ID |
 
 如果其中任意一个缺失，Deploy workflow 仍会执行 install、type-check 和 test，然后跳过 `wrangler deploy`。
 
-KV namespace ID 可以二选一配置：
-
-| 方式 | 适合场景 | 说明 |
-|------|----------|------|
-| 写入 `wrangler.jsonc` | 个人项目直接部署 | 把 `<production-kv-id>` 和 `<preview-kv-id>` 替换成真实 ID 并提交 |
-| GitHub Secrets | 不想把账号资源 ID 提交进仓库 | 配置 `CLOUDFLARE_KV_NAMESPACE_ID` 和 `CLOUDFLARE_PREVIEW_KV_NAMESPACE_ID`，workflow 会在 deploy 前临时注入 |
-
-如果两种方式都没有配置，`pnpm cf:config-check` 会在 deploy 前失败，并提示先创建 KV namespace。
+不需要配置 KV namespace ID。workflow 会在 deploy 前自动查找名为 `GITHUB_CACHE` 的 Workers KV namespace；如果不存在，会自动创建，并把真实 ID 临时注入 `wrangler.jsonc`。
 
 Cloudflare API token 权限表：
 
 | 场景 | Dashboard 选择项 | API permissions reference 名称 | Scope | 是否必需 |
 |------|------------------|--------------------------------|-------|----------|
 | GitHub Actions 执行 `wrangler deploy` | Edit Cloudflare Workers / Workers Scripts Edit | Workers Scripts Write | Account | 必需 |
-| 同一个 token 创建或管理 KV namespace | Workers KV Storage Edit | Workers KV Storage Write | Account | 可选 |
+| GitHub Actions 自动创建或复用 `GITHUB_CACHE` KV namespace | Workers KV Storage Edit | Workers KV Storage Write | Account | 必需 |
 | 同一个 token 管理 Worker routes 或 custom domain routes | Workers Routes Edit | Workers Routes Write | Zone | 可选 |
 
 默认私有 Service Binding 方案不需要 Worker custom domain，也不需要 zone-level Worker route。
@@ -176,33 +167,31 @@ pnpm test
 pnpm deploy:dry
 ```
 
-创建 KV namespace：
+手动部署时创建 KV namespace：
 
 ```bash
 pnpm wrangler kv namespace create GITHUB_CACHE
-pnpm wrangler kv namespace create GITHUB_CACHE --preview
 ```
 
-把返回的 `id` 和 `preview_id` 写入 `wrangler.jsonc`：
+把返回的 `id` 写入 `wrangler.jsonc`：
 
 ```jsonc
 "kv_namespaces": [
   {
     "binding": "GITHUB_CACHE",
-    "id": "<production-kv-id>",
-    "preview_id": "<preview-kv-id>"
+    "id": "<production-kv-id>"
   }
 ]
 ```
 
-部署前检查 `wrangler.jsonc` 是否仍然包含占位符：
+GitHub Actions 不需要手动执行这一步；workflow 会自动创建或复用 `GITHUB_CACHE`。本地手动部署前可以运行：
 
 ```bash
-pnpm cf:prepare-config # optional: inject IDs from env vars in CI
+pnpm cf:prepare-config
 pnpm cf:config-check
 ```
 
-如果 `id` 仍是 `<production-kv-id>` 或 `preview_id` 仍是 `<preview-kv-id>`，GitHub Actions 会在真正调用 `wrangler deploy` 前失败，并提示先替换为真实 KV namespace ID。
+如果 `id` 仍是 `<production-kv-id>`，`pnpm cf:config-check` 会在真正调用 `wrangler deploy` 前失败，并给出明确提示。
 
 配置可选 GitHub API token：
 
@@ -247,6 +236,18 @@ Project -> Settings -> Environment Variables -> GITHUB_TOKEN
 ```
 
 Vercel 路径不使用 Cloudflare Worker Secret、`CLOUDFLARE_API_TOKEN` 或 `CLOUDFLARE_ACCOUNT_ID`。
+
+### Vercel GitHub Actions 部署
+
+仓库包含 `Deploy Vercel` workflow。只想用 Vercel 托管这个缓存服务时，在 GitHub Repository Secrets 添加：
+
+| Secret | 是否必需 | 用途 |
+|--------|----------|------|
+| `VERCEL_TOKEN` | 需要 | 允许 GitHub Actions 调用 Vercel CLI 部署 |
+| `VERCEL_ORG_ID` | 可选 | 指定已有 Vercel team/user scope |
+| `VERCEL_PROJECT_ID` | 可选 | 指定已有 Vercel project |
+
+未配置 `VERCEL_TOKEN` 时，workflow 仍会执行 install、type-check 和 test，然后跳过 Vercel deploy。
 
 ## 缓存策略
 
