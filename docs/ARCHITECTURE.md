@@ -222,6 +222,15 @@ scheduled(controller, env, ctx) {
 - VM 临时存储 (`/tmp`)：500 MB
 - 无 Vercel KV / Upstash / Supabase 依赖
 
+### 应用层 body 大小限制
+
+| 资源类型 | 上限 | 超限行为 |
+|---------|------|---------|
+| JSON（repo/contents/commits） | 1 MB（`MAX_JSON_BYTES`） | 抛出异常 → 返回 stale 或 504 |
+| 图片（avatar） | 512 KB（`MAX_AVATAR_BYTES`） | 同上 |
+
+> 此限制远低于 Workers KV 的 25 MiB 值上限，旨在避免缓存超大响应。GitHub 返回的 body 超过限制时，`refreshCache` 的 `catch` 捕获异常后优先返回 stale 数据，错误日志不区分「超时」与「body 过大」。
+
 ---
 
 **相关文档**：[运维指南](OPERATIONS.md) | [Cloudflare 部署](CLOUDFLARE_DEPLOYMENT.md) | [Vercel 部署](VERCEL_DEPLOYMENT.md)

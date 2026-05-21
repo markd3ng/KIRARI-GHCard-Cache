@@ -68,7 +68,15 @@ Browser → KIRARI Pages /ghc/*
 | Variable name | `GHCARD_CACHE` |
 | Service | `kirari-ghcard-cache` |
 
-生成的 Pages Function 发送 `X-KIRARI-GHC-PUBLIC-BASE` header，告知 Worker 使用同源 `/ghc/avatar/:owner?size=96` 改写头像 URL。
+生成的 Pages Function 发送 `X-KIRARI-GHC-PUBLIC-BASE` header，值为 KIRARI 的 `githubCard.route`（`/ghc`），告知 Worker 使用同源路径改写 avatar URL。
+
+Worker 端 `publicBaseUrl` 三级解析优先级：
+
+1. **`X-KIRARI-GHC-PUBLIC-BASE` header** — Cloudflare Service Binding 模式由 KIRARI Pages Function 自动注入
+2. **`PUBLIC_BASE_URL` 环境变量** — `wrangler.jsonc` vars 配置，用于 Cron prewarm 等无 header 场景
+3. **`request.url` 的 origin + `/api/github`** — 兜底 fallback（`new URL(request.url).origin`）
+
+> Vercel 路径硬编码使用 `{request.origin}/ghc`，不读取此 header。
 
 **Token 归属**：
 | Token | 位置 |

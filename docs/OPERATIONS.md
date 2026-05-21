@@ -28,6 +28,15 @@
 
 > **`X-Cache` 缺失** = 请求未经过缓存层（直连 GitHub 或 route 未命中）。**`X-Upstream-*` 缺失** = 命中缓存，未请求 upstream。
 
+### `/healthz` 响应对比
+
+| 平台 | 响应体字段 | 示例 |
+|------|-----------|------|
+| Cloudflare Worker | `ok`, `service` | `{"ok":true,"service":"kirari-ghcard-cache"}` |
+| Vercel Function | `ok`, `runtime` | `{"ok":true,"runtime":"vercel"}` |
+
+> 两个平台字段名不同。编写跨平台健康检查时，仅使用 `ok` 字段作为通用判据。
+
 ## TTL 策略
 
 | 资源 | Fresh TTL | Stale TTL | 不可缓存 |
@@ -73,6 +82,24 @@
 | Avatar | `avatar:owner` | `avatar:saicaca` |
 
 > Repo 预热需要 `PUBLIC_BASE_URL` — repo JSON 包含 `owner.avatar_url`，Worker 须知道用哪个公开 base 改写头像 URL。
+
+### Prewarm URL 构造与 Fallback
+
+预热请求内部使用 `PUBLIC_BASE_URL` 拼接 URL，路径为一个虚构的 `/prewarm-placeholder`（仅用于代码内部路由解析，不会产生实际外部请求）：
+
+```typescript
+// src/index.ts:84-87  实际代码
+const baseUrl = publicBaseUrl || "https://prewarm.local/api/github";
+// → `${baseUrl}/prewarm-placeholder?target=${encodeURIComponent(target)}`
+```
+
+| 场景 | 行为 |
+|------|------|
+| `PUBLIC_BASE_URL` 已设置 | 使用其值构造请求 URL，avatar 改写指向该 base |
+| `PUBLIC_BASE_URL` 未设置 + repo 目标 | 跳过该目标，输出 `prewarm_skip` 日志 |
+| `PUBLIC_BASE_URL` 未设置 + 非 repo 目标 | 使用 fallback `https://prewarm.local/api/github`（仅内部，avatar 改写不可达） |
+
+> **Warning**：`prewarm.local` 是纯内部 fallback，不会实际发出网络请求到此域名。repo 类型的预热目标缺少 `PUBLIC_BASE_URL` 时会被跳过；非 repo 目标虽不报错，但 avatar URL 改写会指向不可达的 origin。
 
 ### 处理 GitHub 403 / Rate Limit
 
