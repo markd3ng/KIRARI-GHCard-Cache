@@ -14,12 +14,12 @@ export function evaluateCors(request: Request, env: object): CorsDecision {
   const configuredOrigins = parseAllowedOrigins(getStringBinding(env, "ALLOWED_ORIGINS"));
   const origin = request.headers.get("Origin") ?? undefined;
 
-  if (configuredOrigins.length === 0) {
-    return { allowed: true, allowOrigin: "*" };
-  }
-
   if (!origin) {
     return { allowed: true };
+  }
+
+  if (configuredOrigins.length === 0) {
+    return { allowed: false };
   }
 
   if (configuredOrigins.includes(origin)) {

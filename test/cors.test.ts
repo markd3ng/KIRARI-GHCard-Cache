@@ -2,12 +2,18 @@ import { describe, expect, it } from "vitest";
 import { evaluateCors } from "../src/cors";
 
 describe("evaluateCors", () => {
-  it("allows all origins when no allowlist is configured", () => {
+  it("rejects browser origins when no allowlist is configured", () => {
     const request = new Request("https://cache.test/api/github/repos/a/b", {
-      headers: { Origin: "https://kirari.example.com" },
+      headers: { Origin: "https://evil.example.com" },
     });
 
-    expect(evaluateCors(request, { ALLOWED_ORIGINS: "" })).toEqual({ allowed: true, allowOrigin: "*" });
+    expect(evaluateCors(request, { ALLOWED_ORIGINS: "" })).toEqual({ allowed: false });
+  });
+
+  it("allows no-Origin requests when no allowlist is configured", () => {
+    const request = new Request("https://cache.test/api/github/repos/a/b");
+
+    expect(evaluateCors(request, { ALLOWED_ORIGINS: "" })).toEqual({ allowed: true });
   });
 
   it("allows matching configured origins", () => {

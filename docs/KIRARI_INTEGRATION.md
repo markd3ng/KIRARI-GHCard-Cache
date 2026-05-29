@@ -1,29 +1,28 @@
 # KIRARI 对接
 
-KIRARI 与 KIRARI-GHCard-Cache 独立仓库，无需 monorepo。KIRARI 通过 adapter 模式选择缓存路径。
+KIRARI-GHCard-Cache 与 KIRARI 是两个独立仓库。KIRARI 通过 `githubCard` 配置决定是否生成 `/ghc` runtime route，并把 GitHub card 请求导向缓存代理。
 
-## 三种对接模式
+## 三种模式
 
-| 模式 | KIRARI `apiBase` | adapter 状态 | 生成 route | 缓存服务 |
-|------|-----------------|-------------|-----------|----------|
-| 直连 GitHub | `https://api.github.com` | `enabled=false` | 不生成 | 无 |
-| Cloudflare 缓存 | `/ghc` | `provider=cloudflare` | `functions/ghc/[[path]].ts` | Service Binding → 私有 Worker |
-| Vercel 缓存 | `/ghc` | `provider=vercel` | `api/ghc/[...path].ts` | 同项目 Vercel Function |
+| 模式 | `githubCard.apiBase` | adapter | 生成文件 | 请求目标 |
+| --- | --- | --- | --- | --- |
+| 直连 GitHub | `https://api.github.com` | `enabled = false` | 不生成 | GitHub REST API |
+| Cloudflare 缓存 | `/ghc` | `provider = "cloudflare"` | `functions/ghc/[[path]].ts` | Pages Service Binding -> Worker |
+| Vercel 缓存 | `/ghc` | `provider = "vercel"` | `api/ghc/[...path].ts` | Vercel Function |
 
-> **直连模式**下 KIRARI card 直接调用 GitHub REST API（60 req/h 匿名限制）。adapter 禁用时 `route` / `serviceBinding` 配置被忽略。
+`route` 默认是 `/ghc`。adapter 关闭时，`route` 和 `serviceBinding` 不参与运行。
 
-## 配置归属表
+## 配置归属
 
-| 配置项 | 配在 | 不配在 |
-|--------|------|--------|
+| 配置或 Secret | 放在 | 不放在 |
+| --- | --- | --- |
 | `githubCard.apiBase` | KIRARI `kirari.config.toml` | 缓存仓库 |
-| `githubCard.adapter.enabled` | KIRARI `kirari.config.toml` | 缓存仓库 |
-| `githubCard.adapter.provider` | KIRARI `kirari.config.toml` | 缓存仓库 |
-| `githubCard.adapter.serviceBinding` | KIRARI `kirari.config.toml` | 缓存仓库 |
-| 缓存用 `GITHUB_TOKEN` | Cloudflare Worker Secret / Vercel Env | KIRARI `kirari.config.toml` |
-| `CLOUDFLARE_API_TOKEN` / `_ACCOUNT_ID` | GHC 仓库 GitHub Repository Secrets | KIRARI 项目 |
+| `githubCard.adapter.*` | KIRARI `kirari.config.toml` | 缓存仓库 |
+| `GITHUB_TOKEN` | 缓存运行时：Worker Secret 或 Vercel Env | KIRARI 配置 |
+| `CLOUDFLARE_API_TOKEN` | GHC 仓库 GitHub Secrets | KIRARI runtime |
+| `VERCEL_TOKEN` | GHC 或 KIRARI 仓库 GitHub Secrets | Vercel runtime |
 
-## 默认配置（直连）
+## 直连模式
 
 ```toml
 [githubCard]
@@ -36,9 +35,16 @@ route = "/ghc"
 serviceBinding = "GHCARD_CACHE"
 ```
 
-行为：不生成 runtime route，card API 直连 `https://api.github.com`。KIRARI 无需 token，无需运行时平台。
+行为：
 
-## Cloudflare Pages 对接
+| 项目 | 结果 |
+| --- | --- |
+| Runtime route | 不生成 |
+| 缓存 | 无 |
+| Rate limit | GitHub 匿名 60 req/h，除非 KIRARI 自己另有实现 |
+| 适合 | 临时回滚、静态环境、调试 |
+
+## Cloudflare Pages 模式
 
 ```toml
 [githubCard]
@@ -51,43 +57,36 @@ route = "/ghc"
 serviceBinding = "GHCARD_CACHE"
 ```
 
-```
 请求链路：
-Browser → KIRARI Pages /ghc/*
-  → generated functions/ghc/[[path]].ts
-    → Service Binding GHCARD_CACHE
-      → kirari-ghcard-cache Worker /api/github/*
-        → GitHub API
+
+```text
+Browser
+  -> KIRARI Pages /ghc/repos/owner/repo
+  -> functions/ghc/[[path]].ts
+  -> env.GHCARD_CACHE.fetch(...)
+  -> kirari-ghcard-cache Worker /api/github/repos/owner/repo
+  -> GitHub
 ```
 
-**Service Binding 配置**（Cloudflare Dashboard）：
+Cloudflare Dashboard 需要给 KIRARI Pages 项目添加：
 
 | 字段 | 值 |
-|------|----|
-| Type | Service binding |
+| --- | --- |
+| Binding type | Service binding |
 | Variable name | `GHCARD_CACHE` |
 | Service | `kirari-ghcard-cache` |
 
-生成的 Pages Function 发送 `X-KIRARI-GHC-PUBLIC-BASE` header，值为 KIRARI 的 `githubCard.route`（`/ghc`），告知 Worker 使用同源路径改写 avatar URL。
+生成的 Pages Function 会发送 `X-KIRARI-GHC-PUBLIC-BASE` header。Worker 读取该值后，把 repo JSON 里的 `owner.avatar_url` 改写为 KIRARI 同源头像路径。
 
-Worker 端 `publicBaseUrl` 三级解析优先级：
+Worker 解析公开 base 的优先级：
 
-1. **`X-KIRARI-GHC-PUBLIC-BASE` header** — Cloudflare Service Binding 模式由 KIRARI Pages Function 自动注入
-2. **`PUBLIC_BASE_URL` 环境变量** — `wrangler.jsonc` vars 配置，用于 Cron prewarm 等无 header 场景
-3. **`request.url` 的 origin + `/api/github`** — 兜底 fallback（`new URL(request.url).origin`）
+| 优先级 | 来源 | 使用场景 |
+| --- | --- | --- |
+| 1 | `X-KIRARI-GHC-PUBLIC-BASE` header | KIRARI Pages Service Binding 正常请求 |
+| 2 | `PUBLIC_BASE_URL` env | Cloudflare Cron prewarm |
+| 3 | `request.url` origin + `/api/github` | 兜底 |
 
-> Vercel 路径硬编码使用 `{request.origin}/ghc`，不读取此 header。
-
-**Token 归属**：
-| Token | 位置 |
-|-------|------|
-| `GITHUB_TOKEN` | GHC Worker Secret（`pnpm wrangler secret put`） |
-| `CLOUDFLARE_API_TOKEN` | GHC 仓库 GitHub Secret（仅 CI） |
-| `CLOUDFLARE_ACCOUNT_ID` | GHC 仓库 GitHub Secret（仅 CI） |
-
-KIRARI 本身**不需要**任何 token。
-
-## Vercel 同项目对接
+## Vercel 模式
 
 ```toml
 [githubCard]
@@ -99,23 +98,59 @@ provider = "vercel"
 route = "/ghc"
 ```
 
-```
 请求链路：
-Browser → KIRARI Vercel /ghc/*
-  → generated api/ghc/[...path].ts
-    → GitHub API
+
+```text
+Browser
+  -> KIRARI Vercel /ghc/repos/owner/repo
+  -> api/ghc/[...path].ts
+  -> src/vercel.ts
+  -> GitHub
 ```
 
-**Token 归属**：
-| Token | 位置 |
-|-------|------|
-| `GITHUB_TOKEN` | KIRARI Vercel Project Environment Variables |
-| `CLOUDFLARE_API_TOKEN` | 不使用 |
-| `CLOUDFLARE_ACCOUNT_ID` | 不使用 |
+Vercel 路径固定使用当前请求 origin + `/ghc` 改写 avatar URL，不读取 `X-KIRARI-GHC-PUBLIC-BASE`。
 
-Vercel 路径默认使用 HTTP cache headers，不依赖 Vercel KV / Upstash / Supabase / Firewall / Deployment Protection / custom domain。
+## CORS
 
-## 回滚到直连
+同源 KIRARI 请求通常不会带跨站 CORS 压力，但浏览器、预览域或独立缓存项目会遇到 allowlist。
+
+| 平台 | 变量 |
+| --- | --- |
+| Cloudflare | `ALLOWED_ORIGINS=https://your-kirari.example` |
+| Vercel | `GHC_ALLOWED_ORIGINS=https://your-kirari.example` |
+
+留空时，无 `Origin` 的服务端或同源请求允许；带 `Origin` 的浏览器跨站请求返回 403。
+
+## 验收清单
+
+KIRARI 构建后：
+
+| 检查 | Cloudflare | Vercel |
+| --- | --- | --- |
+| Generated route | `functions/ghc/[[path]].ts` | `api/ghc/[...path].ts` |
+| KIRARI config | `apiBase = "/ghc"` | `apiBase = "/ghc"` |
+| provider | `cloudflare` | `vercel` |
+| Service Binding | `GHCARD_CACHE` | 不需要 |
+
+浏览器中：
+
+| 检查 | 预期 |
+| --- | --- |
+| `::github{repo="owner/repo"}` | card 正常渲染 |
+| `::githubfile{repo="owner/repo" file="README.md"}` | file card 正常渲染 |
+| Network | 请求走 `/ghc/repos/...`、`/ghc/avatar/...` |
+| Network | 没有直连 `api.github.com` 或 `github.com/*.png` |
+| Response headers | 有 `X-Cache` |
+
+KIRARI 验证命令：
+
+```bash
+pnpm type-check
+pnpm astro check
+pnpm build
+```
+
+## 回滚
 
 ```toml
 [githubCard]
@@ -126,39 +161,17 @@ enabled = false
 provider = "none"
 ```
 
-重新构建 KIRARI。materializer 自动删除已生成的 `/ghc` runtime route。
+重新构建 KIRARI。materializer 应删除已生成的 `/ghc` runtime route。回滚后浏览器 Network 会重新出现 `api.github.com` 请求，这是预期行为。
 
 ## KIRARI 涉及文件
 
-| 文件 | 用途 |
-|------|------|
+| 文件 | 作用 |
+| --- | --- |
 | `kirari.config.toml` | 用户配置入口 |
 | `src/utils/config-loader.ts` | 解析 `githubCard` 配置 |
-| `src/types/config.ts` | 配置类型定义 |
-| `scripts/materialize-ghc-adapter.mjs` | 构建前创建/删除 runtime route |
+| `src/types/config.ts` | 配置类型 |
+| `scripts/materialize-ghc-adapter.mjs` | 构建前创建或删除 runtime route |
 | `adapters/github-card/cloudflare/route.ts.template` | Cloudflare Pages Function 模板 |
 | `adapters/github-card/vercel/route.ts.template` | Vercel Function 模板 |
-| `src/plugins/rehype-component-github-card.mjs` | Repo card 使用 `githubCard.apiBase` |
-| `src/plugins/rehype-component-github-file-card.mjs` | File card 使用 `githubCard.apiBase` |
-
-## 验收清单
-
-| 检查项 | 预期 |
-|--------|------|
-| KIRARI adapter 关闭 | 不生成 `functions/ghc` 或 `api/ghc` |
-| KIRARI Cloudflare 构建 | 生成 `functions/ghc/[[path]].ts` |
-| KIRARI Vercel 构建 | 生成 `api/ghc/[...path].ts` |
-| `::github{repo="owner/repo"}` | card 正常渲染 |
-| `::githubfile{repo="owner/repo" file="README.md"}` | file card 正常渲染 |
-| Browser Network | 请求走 `/ghc/repos/...` |
-| Browser Network | 头像请求走 `/ghc/avatar/...` |
-| Browser Network | 无 `api.github.com` 请求 |
-| 响应 header | 存在 `X-Cache` |
-
-验证命令：
-
-```bash
-pnpm type-check
-pnpm astro check
-pnpm build
-```
+| `src/plugins/rehype-component-github-card.mjs` | repo card 使用 `githubCard.apiBase` |
+| `src/plugins/rehype-component-github-file-card.mjs` | file card 使用 `githubCard.apiBase` |

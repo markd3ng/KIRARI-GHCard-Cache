@@ -1,236 +1,217 @@
 # 架构与缓存流程
 
-## 模块依赖图
+本文说明 KIRARI-GHCard-Cache 的运行时结构、路由限制、缓存策略和两个平台的差异。
 
-```
-                           ┌─────────────┐
-                           │  src/index   │  Worker 入口：fetch + scheduled
-                           │  (Cloudflare)│
-                           └──────┬──────┘
-                                  │
-                    ┌─────────────┼─────────────┐
-                    │             │             │
-               ┌────▼────┐  ┌────▼────┐  ┌────▼────┐
-               │  cors   │  │  cache  │  │ router  │
-               │(.ts)    │  │ (.ts)   │  │ (.ts)   │
-               └─────────┘  └──┬──┬───┘  └─────────┘
-                               │  │
-                    ┌──────────┘  └──────────┐
-                    │                        │
-               ┌────▼────┐             ┌─────▼──────┐
-               │ github  │             │  normalize  │
-               │ (.ts)   │             │  (.ts)      │
-               └─────────┘             └────────────┘
-                    │
-               ┌────▼────┐
-               │  env    │
-               │ (.ts)   │
-               └─────────┘
+## 模块图
 
-┌──────────────┐
-│  src/vercel  │  Vercel 入口（api/ghc/[...path].ts 引入）
-│  (.ts)       │  独立模块，无 Cloudflare 依赖
-│              │  重复 cache.ts 的 TTL/encode 逻辑
-└──────┬───────┘
-       │
-  ┌────▼────┐
-  │  cors   │
-  │ github  │  ← 复用 src/ 模块
-  │ router  │
-  └─────────┘
+```text
+Cloudflare Worker
+  src/index.ts
+    -> src/cors.ts
+    -> src/router.ts
+    -> src/cache.ts
+      -> src/github.ts
+      -> src/normalize.ts
+      -> src/env.ts
+    -> src/response.ts
+
+Vercel Function
+  api/ghc/[...path].ts
+    -> src/vercel.ts
+      -> src/cors.ts
+      -> src/router.ts
+      -> src/github.ts
+      -> src/normalize.ts
+      -> src/response.ts
 ```
 
-## 数据流
+Cloudflare 路径依赖 `caches.default` 和 `env.GITHUB_CACHE`。Vercel 路径不依赖 Cloudflare binding，会动态探测 `@vercel/functions` Runtime Cache，失败时回退到直接请求 GitHub。
 
-### Cloudflare Worker 路径
+## 路由边界
 
-```
-Browser
-  │  GET /ghc/repos/owner/repo
-  ▼
-KIRARI Cloudflare Pages
-  │  Pages Function 通过 Service Binding 转发
-  ▼
-┌─────────────────────────────────────────────────────┐
-│  Worker (src/index.ts → cache.ts)                    │
-│                                                      │
-│  1. evaluateCors()                                   │
-│     └─ ALLOWED_ORIGINS 为空 → Access-Control-Allow-Origin: *       │
-│     └─ Origin 在白名单内 → 回显特定 Origin                      │
-│     └─ 拒绝 → 403                                     │
-│                                                      │
-│  2. parseRoute(url)                                  │
-│     └─ 无效路径 → 400 + { error, message }             │
-│     └─ 路径遍历 / 非法字符 → 400                       │
-│                                                      │
-│  3. handleCachedRoute()                              │
-│     ├─ L1: caches.default.match(l1Request)           │
-│     │  └─ 命中 → X-Cache: HIT-L1 → return            │
-│     ├─ L2: env.GITHUB_CACHE.get(cacheKey)            │
-│     │  ├─ 有效 (freshUntil > now)                     │
-│     │  │  └─ X-Cache: HIT-KV → async L1 写入 → return │
-│     │  ├─ 过期但在 stale 窗口内 (staleUntil > now)     │
-│     │  │  └─ X-Cache: STALE → ctx.waitUntil(refresh) │
-│     │  │  └─ 返回 stale 数据                           │
-│     │  └─ 未命中 → refreshCache()                     │
-│     └─ refreshCache()                                │
-│        ├─ fetchGithub() → GitHub REST API            │
-│        │  ├─ 超时 8s (AbortSignal.timeout)            │
-│        │  ├─ 无 token → 60 req/h                     │
-│        │  └─ 有 token → 5,000 req/h                  │
-│        ├─ normalizeUpstreamBody()                    │
-│        │  └─ repo JSON: owner.avatar_url 改写为      │
-│        │    /api/github/avatar/{owner}?size=96       │
-│        ├─ getTtlPolicy(route, status)                 │
-│        ├─ upstreamToEnvelope()                        │
-│        │  └─ body encoding: JSON → utf-8, 图片 → base64│
-│        └─ putL1 + GITHUB_CACHE.put() → return         │
-│                                                      │
-│  4. withCors(response) → return                      │
-└─────────────────────────────────────────────────────┘
+只支持 KIRARI GitHub card 需要的接口：
+
+| Route kind | 内部路径 | 关键校验 |
+| --- | --- | --- |
+| `repo` | `/api/github/repos/:owner/:repo` | owner/repo 只允许 `A-Z a-z 0-9 _ . -`，最长 100 |
+| `contents` | `/api/github/repos/:owner/:repo/contents/:path?ref=:ref` | path 最长 512，拒绝空 segment、`.`、`..`、控制字符、反斜杠 |
+| `commits` | `/api/github/repos/:owner/:repo/commits?path=:path&per_page=1&sha=:sha` | 只允许 `path`、`per_page`、`sha`，且 `per_page` 必须是 `1` |
+| `avatar` | `/api/github/avatar/:owner?size=96` | size 必须是 16-256 的整数 |
+
+不支持的 GitHub API 会返回 404。非法入参返回 400。
+
+## Cloudflare 数据流
+
+```text
+Request
+  -> evaluateCors()
+  -> method check: GET / HEAD / OPTIONS
+  -> /healthz short-circuit
+  -> parseRoute()
+  -> handleCachedRoute()
+    -> L1 caches.default.match()
+    -> L2 env.GITHUB_CACHE.get()
+    -> fetchGithub()
+    -> normalizeUpstreamBody()
+    -> env.GITHUB_CACHE.put()
+    -> caches.default.put()
+  -> withCors()
 ```
 
-### Vercel Function 路径
+缓存命中顺序：
 
-```
-Browser
-  │  GET /ghc/repos/owner/repo
-  ▼
-KIRARI Vercel (or standalone GHC project)
-  │  vercel.json rewrite: /ghc/* → /api/ghc/*
-  ▼
-┌──────────────────────────────────────────────────────┐
-│  Function (api/ghc/[...path].ts → src/vercel.ts)      │
-│                                                       │
-│  1. getVercelEnv() → process.env 读取                  │
-│     └─ GHC_ALLOWED_ORIGINS || ALLOWED_ORIGINS          │
-│                                                       │
-│  2. URL 重写：/ghc/* → /api/github/*                   │
-│                                                       │
-│  3. evaluateCors() + parseRoute()                     │
-│                                                       │
-│  4. Runtime Cache 探测                                  │
-│     ├─ getRuntimeCache() → import(@vercel/functions)   │
-│     │  └─ 可用 → cache.get(key)                        │
-│     │  │  ├─ 命中 → X-Cache: HIT-RUNTIME → return     │
-│     │  │  └─ 未命中 → fetch → cache.set() → return    │
-│     │  └─ 不可用 → 直接 fetch（仅 HTTP Cache）            │
-│     └─ 包缺失或异常 → 静默回退                            │
-│                                                       │
-│  5. 响应设置 Cache-Control: s-maxage=N,                │
-│      stale-while-revalidate=M                          │
-└──────────────────────────────────────────────────────┘
+| 阶段 | 命中 header | 行为 |
+| --- | --- | --- |
+| L1 Cache API | `X-Cache: HIT-L1` | 直接返回 |
+| L2 KV fresh | `X-Cache: HIT-KV` | 返回 KV 数据，并后台写入 L1 |
+| L2 KV stale | `X-Cache: STALE` | 返回 stale 数据，并后台刷新 |
+| 未命中 | `X-Cache: MISS` | 请求 GitHub，写入 KV 和 L1 |
+
+GitHub 超时、403/429、5xx 或 body 过大时，如果已有 stale 数据，Cloudflare 返回 stale；否则返回错误响应。
+
+## Vercel 数据流
+
+```text
+Request
+  -> getVercelEnv()
+  -> evaluateCors()
+  -> method check: GET / HEAD / OPTIONS
+  -> /ghc/healthz short-circuit
+  -> /ghc/* -> /api/github/*
+  -> parseRoute()
+  -> getRuntimeCache()
+  -> fetch GitHub when cache miss
+  -> normalizeUpstreamBody()
+  -> set Cache-Control and optional Runtime Cache
 ```
 
-## 缓存层对比
+Vercel cache 状态：
 
-| 维度 | Cloudflare L1 (Cache API) | Cloudflare L2 (KV) | Vercel Runtime Cache |
-|------|--------------------------|-------------------|---------------------|
-| 存储位置 | Worker 内存/边缘节点 | 全球 KV 持久存储 | Vercel Edge Network |
-| 读延迟 | <5ms | ~50ms | 同区域 <10ms |
-| 过期后 | 立即清除，无 stale | 可配置 stale 窗口 | 取决于 `stale-while-revalidate` |
-| 持久性 | 进程级，不保证 | 持久化，跨版本 | 不保证（archived 48h idle） |
-| 写入策略 | 同步 + 后台写入 | `ctx.waitUntil` | 同步 |
-| 免费层限制 | 无单独限制 | 100k 读/天，1k 写/天 | Hobby: 最大 10s 执行时间 |
-| KV 值上限 | 25 MiB | 25 MiB | — |
-| KV key 上限 | — | 512 B | — |
+| Header | 行为 |
+| --- | --- |
+| `X-Cache: HIT-RUNTIME` | Runtime Cache fresh 命中 |
+| `X-Cache: STALE-RUNTIME` | Runtime Cache stale 命中 |
+| `X-Cache: MISS` | 请求 GitHub upstream |
+
+如果 Runtime Cache 不存在或不可用，Function 仍返回 `Cache-Control: public, s-maxage=..., stale-while-revalidate=...`。
+
+## GitHub 请求
+
+| Route kind | Upstream |
+| --- | --- |
+| `repo` | `https://api.github.com/repos/:owner/:repo` |
+| `contents` | `https://api.github.com/repos/:owner/:repo/contents/:path` |
+| `commits` | `https://api.github.com/repos/:owner/:repo/commits?path=:path&per_page=1` |
+| `avatar` | `https://github.com/:owner.png?size=:size` |
+
+REST API 请求 header：
+
+| Header | 值 |
+| --- | --- |
+| `Accept` | `application/vnd.github+json` |
+| `X-GitHub-Api-Version` | `2022-11-28` |
+| `Authorization` | `Bearer ${GITHUB_TOKEN}`，仅 token 存在且非 avatar 时设置 |
+
+avatar 请求不带 GitHub token，`Accept` 使用图片类型。
+
+所有 upstream fetch 使用 8 秒超时。
+
+## 响应归一化
+
+`src/normalize.ts` 负责让 KIRARI 继续使用同源缓存路径。
+
+| 资源 | 归一化 |
+| --- | --- |
+| repo JSON | 将 `owner.avatar_url` 改写为公开 base 下的 `/avatar/:owner?size=96` |
+| contents JSON | 保持 GitHub body，按 UTF-8 缓存 |
+| commits JSON | 保持 GitHub body，按 UTF-8 缓存 |
+| avatar 图片 | 以 base64 存入缓存 envelope，返回时解码成二进制 |
+
+Cloudflare 的公开 base 优先级：
+
+1. `X-KIRARI-GHC-PUBLIC-BASE` request header
+2. `PUBLIC_BASE_URL` env
+3. 当前 request origin + `/api/github`
+
+Vercel 使用当前 request origin + `/ghc`。
 
 ## TTL 策略
 
-```typescript
-// src/cache.ts 实现
-getTtlPolicy(route, status): { freshTtl, staleTtl, cacheable }
-```
+| Status | Route kind | Fresh TTL | Stale TTL | Cacheable |
+| --- | --- | --- | --- | --- |
+| `200` | `repo` | 6 h | 7 d | 是 |
+| `200` | `contents` | 24 h | 14 d | 是 |
+| `200` | `commits` | 1 h | 7 d | 是 |
+| `200` | `avatar` | 7 d | 30 d | 是 |
+| `404` | any | 10 min | 1 d | 是 |
+| `403` / `429` / `5xx` | any | 0 | 0 | 否 |
 
-| status | route kind | freshTtl | staleTtl | cacheable |
-|--------|-----------|----------|----------|-----------|
-| 200 | repo | 6 h (21600s) | 7 d (604800s) | ✅ |
-| 200 | contents | 24 h (86400s) | 14 d (1209600s) | ✅ |
-| 200 | commits | 1 h (3600s) | 7 d (604800s) | ✅ |
-| 200 | avatar | 7 d (604800s) | 30 d (2592000s) | ✅ |
-| 404 | any | 10 min (600s) | 1 d (86400s) | ✅ |
-| 403/429/5xx | any | 0 | 0 | ❌ |
+不可缓存响应不会写入缓存。若已有 stale envelope，则优先返回 stale。
 
-> **不可缓存响应**仅在已有 stale 数据时返回 stale；否则直接返回 upstream 错误。
+## Cache Key
 
-## Cache Key 格式
+格式：
 
-```
-ghcard:{CACHE_NAMESPACE_VERSION}:{kind}:{owner}:{repo}:{optional}:{ref|sha|size}
+```text
+ghcard:{CACHE_NAMESPACE_VERSION}:{kind}:{owner}:{repo}:{path/ref/sha/size}
 ```
 
 示例：
 
-| Route | Cache Key |
-|-------|-----------|
-| `repo:saicaca/fuwari` | `ghcard:v1:repo:saicaca:fuwari` |
-| `contents:saicaca/fuwari:README.md?ref=main` | `ghcard:v1:contents:saicaca:fuwari:README.md:main` |
-| `commits:saicaca/fuwari:README.md?sha=abc` | `ghcard:v1:commits:saicaca/fuwari:README.md:abc` |
-| `avatar:saicaca?size=96` | `ghcard:v1:avatar:saicaca:96` |
+| 请求 | Cache key |
+| --- | --- |
+| `/api/github/repos/saicaca/fuwari` | `ghcard:v1:repo:saicaca:fuwari` |
+| `/api/github/repos/saicaca/fuwari/contents/README.md?ref=main` | `ghcard:v1:contents:saicaca:fuwari:README.md:main` |
+| `/api/github/repos/saicaca/fuwari/commits?path=README.md&sha=main` | `ghcard:v1:commits:saicaca:fuwari:README.md:main` |
+| `/api/github/avatar/saicaca?size=96` | `ghcard:v1:avatar:saicaca:96` |
 
-递增 `CACHE_NAMESPACE_VERSION` 使所有旧 key 自然过期（不主动删除）。
+递增 `CACHE_NAMESPACE_VERSION` 会让新请求使用新 key。旧 key 不主动删除，会自然过期。
 
-## 错误处理策略
+## Body 大小限制
 
-| 故障场景 | Cloudflare | Vercel |
-|----------|-----------|--------|
-| GitHub 超时 (8s) | 返回 stale（如有）或 504 | 返回 stale（Runtime Cache 有数据时）或 504 |
-| GitHub 403/429 | 返回 403（无 stale 时） | 同左 |
-| GitHub 5xx | 返回 502（无 stale 时） | 同左 |
-| KV 写入失败 | catch 静默，仅丢失该次缓存 | N/A |
-| KV 读取失败 | 回退直连 GitHub | N/A |
-| 入参校验失败 | 400 + JSON error | 同左 |
-| 路径遍历攻击 | 400，拒绝 `..`、控制字符、空 segment | 同左 |
+| 类型 | 上限 | 超限行为 |
+| --- | --- | --- |
+| JSON | 1 MB | 抛出异常，优先返回 stale，否则 504 |
+| Avatar | 512 KB | 抛出异常，优先返回 stale，否则 504 |
 
-## Cron 预热
+这些限制低于 Workers KV 单值上限，目的是避免缓存异常大的 GitHub 响应。
 
-```typescript
-// src/index.ts
-scheduled(controller, env, ctx) {
-  ctx.waitUntil(prewarmTargets(env, ctx));
+## Cloudflare Cron 预热
+
+`wrangler.jsonc` 中配置：
+
+```jsonc
+"triggers": {
+  "crons": ["17 */6 * * *"]
 }
 ```
 
-- **频率**：每 6 小时（`17 */6 * * *`）
-- **上限**：每次最多 50 个 target
-- **repo 目标**需要 `PUBLIC_BASE_URL`（用于 avatar URL 改写）
-- **不等待**所有预热完成（`ctx.waitUntil`，不阻塞响应）
+Worker 每 6 小时读取 `PREWARM_TARGETS`，最多处理 50 个 target。
 
-目标格式：
+| Target | 示例 |
+| --- | --- |
+| `repo:owner/repo` | `repo:saicaca/fuwari` |
+| `content:owner/repo:path` | `content:saicaca/fuwari:README.md` |
+| `commits:owner/repo:path` | `commits:saicaca/fuwari:README.md` |
+| `avatar:owner` | `avatar:saicaca` |
 
-| 类型 | 格式 | 示例 |
-|------|------|------|
-| Repo | `repo:owner/repo` | `repo:saicaca/fuwari` |
-| Contents | `content:owner/repo:path` | `content:saicaca/fuwari:README.md` |
-| Commits | `commits:owner/repo:path` | `commits:saicaca/fuwari:README.md` |
-| Avatar | `avatar:owner` | `avatar:saicaca` |
+repo 预热必须配置 `PUBLIC_BASE_URL`，否则 Worker 无法正确改写 repo JSON 中的头像 URL，会跳过该 target 并输出 `prewarm_skip` 日志。
 
-## 关键限制（免费层）
+## 错误响应
 
-### Cloudflare Workers KV
-- 读：100,000 次/天
-- 写（不同 key）：1,000 次/天
-- 写（同 key）：1 次/秒
-- 存储：1 GB / account
-- 值上限：25 MiB
-- key 上限：512 B
+| 场景 | 状态 | message |
+| --- | --- | --- |
+| CORS Origin 不允许 | 403 | `Origin is not allowed...` |
+| Method 不支持 | 405 | `Only GET, HEAD, and OPTIONS are supported.` |
+| 不支持的 endpoint | 404 | `Unsupported endpoint.` 或 `Unsupported GitHub cache endpoint.` |
+| 非法 path/ref/size | 400 | 对应校验错误 |
+| GitHub rate limit 且无 stale | 403 / 429 | `GitHub rate limit or access restriction...` |
+| GitHub 5xx 且无 stale | 502 | `GitHub upstream returned a temporary error...` |
+| GitHub 超时且无 stale | 504 | `GitHub upstream did not respond...` |
 
-### Vercel Hobby
-- Function 最大执行时间：300s（默认 10s）
-- 并发：30,000
-- 每个 deployment Function 数：12（非框架模式）
-- VM 临时存储 (`/tmp`)：500 MB
-- 无 Vercel KV / Upstash / Supabase 依赖
+## 相关文档
 
-### 应用层 body 大小限制
-
-| 资源类型 | 上限 | 超限行为 |
-|---------|------|---------|
-| JSON（repo/contents/commits） | 1 MB（`MAX_JSON_BYTES`） | 抛出异常 → 返回 stale 或 504 |
-| 图片（avatar） | 512 KB（`MAX_AVATAR_BYTES`） | 同上 |
-
-> 此限制远低于 Workers KV 的 25 MiB 值上限，旨在避免缓存超大响应。GitHub 返回的 body 超过限制时，`refreshCache` 的 `catch` 捕获异常后优先返回 stale 数据，错误日志不区分「超时」与「body 过大」。
-
----
-
-**相关文档**：[运维指南](OPERATIONS.md) | [Cloudflare 部署](CLOUDFLARE_DEPLOYMENT.md) | [Vercel 部署](VERCEL_DEPLOYMENT.md)
+- [部署入口](DEPLOYMENT.md)
+- [Cloudflare 部署](CLOUDFLARE_DEPLOYMENT.md)
+- [Vercel 部署](VERCEL_DEPLOYMENT.md)
+- [运维指南](OPERATIONS.md)

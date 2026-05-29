@@ -1,116 +1,195 @@
-# Cloudflare 免费版部署
+# Cloudflare 部署
 
-完整缓存方案：Cache API (L1) + Workers KV (L2) + stale-while-revalidate + Cron Triggers。免费层可用，无需付费 add-on。
+Cloudflare 路径提供完整缓存：Worker Cache API 作为 L1，Workers KV 作为 L2，KV 中的 stale 数据可在 GitHub rate limit、超时或 5xx 时继续兜底。
 
-## 请求链路
+## 最终链路
 
+```text
+Browser
+  -> KIRARI Pages /ghc/*
+  -> generated Pages Function
+  -> Service Binding GHCARD_CACHE
+  -> kirari-ghcard-cache Worker /api/github/*
+  -> GitHub REST API / github.com avatar
 ```
-Browser → KIRARI Pages /ghc/*
-  → Pages Function (Service Binding: GHCARD_CACHE)
-    → 私有 Worker kirari-ghcard-cache
-      → GitHub API + Cache API + Workers KV
-```
 
-Worker 默认关闭 `workers.dev` 和 preview URL：
+`wrangler.jsonc` 默认关闭 Worker 公共入口：
+
 ```jsonc
 "workers_dev": false,
 "preview_urls": false
 ```
 
+生产入口应是 KIRARI 同源 `/ghc/*`，不是 `*.workers.dev`。
+
 ## 前置条件
 
 | 条件 | 说明 |
-|------|------|
-| Cloudflare account | 承载 Worker、KV、Pages 项目 |
-| Node.js + pnpm | 本地检查与 Wrangler |
-| KIRARI 部署在 Cloudflare Pages | Service Binding 需要同 account Pages 项目 |
+| --- | --- |
+| Cloudflare account | Worker、KV、Pages 项目需要在同一个 account 下 |
+| Node.js 24 + pnpm | 与 GitHub Actions 保持一致 |
+| Wrangler 登录或 CI token | 本地部署用 `wrangler login`，CI 用 `CLOUDFLARE_API_TOKEN` |
+| KIRARI 部署在 Cloudflare Pages | Pages Service Binding 需要 Pages runtime |
 
-无需 custom domain、Durable Objects、R2、D1、Queues。
+不需要 Durable Objects、R2、D1、Queues、Worker custom domain 或付费 WAF。
 
----
-
-## Step 1. 本地安装与检查
+## 1. 安装与本地检查
 
 ```bash
 pnpm install
-pnpm cf:types                  # 生成 worker-configuration.d.ts
-pnpm type-check                # TypeScript 类型检查
-pnpm test                      # Vitest 单元测试
-pnpm deploy:dry                # Wrangler 语法校验（不实际部署）
+pnpm cf:types
+pnpm type-check
+pnpm test
+pnpm deploy:dry
 ```
 
-## Step 2. Workers KV Namespace
+预期：
 
-GitHub Actions 自动创建/复用 `GITHUB_CACHE`，无需手动操作。本地手动部署：
+| 命令 | 成功标志 |
+| --- | --- |
+| `pnpm cf:types` | 生成或更新 `worker-configuration.d.ts` |
+| `pnpm type-check` | TypeScript 无错误 |
+| `pnpm test` | Vitest 全部通过 |
+| `pnpm deploy:dry` | Wrangler 能解析配置，但如果 KV 仍是占位符会失败 |
+
+## 2. 创建 Workers KV namespace
+
+本地手动部署：
 
 ```bash
 pnpm wrangler kv namespace create GITHUB_CACHE
-# 返回: { "success": true, "result": { "id": "abc123...", "title": "GITHUB_CACHE" } }
 ```
 
-将返回的 `id` 写入 `wrangler.jsonc`：
+Wrangler 会返回类似：
+
+```json
+{
+  "id": "abc123...",
+  "title": "GITHUB_CACHE"
+}
+```
+
+把 `id` 写入 `wrangler.jsonc`：
 
 ```jsonc
 "kv_namespaces": [
   {
     "binding": "GITHUB_CACHE",
-    "id": "abc123..."  // ← 替换实际 ID
+    "id": "abc123..."
   }
 ]
 ```
 
-> **`wrangler.jsonc` 中预置占位符 `<production-kv-id>`**。部署前必须替换为真实 ID，否则 Cloudflare API 返回不直观的错误。运行 `pnpm cf:prepare-config && pnpm cf:config-check` 可自动注入并验证。
+CI 部署时，如果 `CLOUDFLARE_ACCOUNT_ID` 和 `CLOUDFLARE_API_TOKEN` 已配置，`pnpm cf:prepare-config` 会自动创建或复用 `GITHUB_CACHE` 并把 id 注入 `wrangler.jsonc`。随后 `pnpm cf:config-check` 会阻止占位符配置继续部署。
 
-## Step 3. 运行时 Secret — `GITHUB_TOKEN`
+## 3. 配置运行时 `GITHUB_TOKEN`
 
-可选（生产推荐）。将匿名 60 req/h 提升至 5,000 req/h：
+生产推荐配置：
 
 ```bash
 pnpm wrangler secret put GITHUB_TOKEN
-# 交互式输入 token 值
 ```
 
-| 不要放在 | 原因 |
-|----------|------|
-| GitHub Actions YAML | 不是 CI 部署 token |
-| `kirari.config.toml` | KIRARI 不需要 |
-| `wrangler.jsonc` vars | 提交到仓库的配置不适合存放 secret |
+输入 GitHub token 后，Worker 的 repo、contents、commits 请求会带 `Authorization: Bearer ...`。avatar 请求不会使用 token。
 
-## Step 4. GitHub Actions CI Secrets
+不要把这个 token 放在：
+
+| 位置 | 原因 |
+| --- | --- |
+| `wrangler.jsonc` vars | 会提交到仓库 |
+| `kirari.config.toml` | KIRARI 不需要知道 token |
+| GitHub Actions YAML | 运行时 secret 和 CI deploy token 是两件事 |
+
+## 4. 配置 CORS 与可选预热
+
+在 `wrangler.jsonc` 的 `vars` 或 Cloudflare Dashboard 环境变量中配置：
+
+```jsonc
+"vars": {
+  "CACHE_NAMESPACE_VERSION": "v1",
+  "PUBLIC_BASE_URL": "https://blog.example.com/ghc",
+  "ALLOWED_ORIGINS": "https://blog.example.com,http://localhost:4321",
+  "PREWARM_TARGETS": "repo:saicaca/fuwari,avatar:saicaca"
+}
+```
+
+| 变量 | 是否必需 | 说明 |
+| --- | --- | --- |
+| `CACHE_NAMESPACE_VERSION` | 否 | 缓存 key 版本，递增后旧 key 自然过期 |
+| `ALLOWED_ORIGINS` | 生产推荐 | 浏览器跨站请求白名单；留空时带 `Origin` 请求返回 403 |
+| `PUBLIC_BASE_URL` | repo 预热需要 | Cron 预热 repo JSON 时用它改写 `owner.avatar_url` |
+| `PREWARM_TARGETS` | 否 | 逗号分隔，最多处理 50 个 target |
+
+预热 target 格式：
+
+| 类型 | 格式 | 示例 |
+| --- | --- | --- |
+| Repo | `repo:owner/repo` | `repo:saicaca/fuwari` |
+| Contents | `content:owner/repo:path` | `content:saicaca/fuwari:README.md` |
+| Commits | `commits:owner/repo:path` | `commits:saicaca/fuwari:README.md` |
+| Avatar | `avatar:owner` | `avatar:saicaca` |
+
+## 5. 配置 GitHub Actions Secrets
+
+仓库 Settings -> Secrets and variables -> Actions：
 
 | Secret | 必需 | 用途 |
-|--------|------|------|
-| `CLOUDFLARE_ACCOUNT_ID` | ✅ | Wrangler 部署目标 account |
-| `CLOUDFLARE_API_TOKEN` | ✅ | CI 中 Wrangler 调用 Cloudflare API |
+| --- | --- | --- |
+| `CLOUDFLARE_ACCOUNT_ID` | 是 | 指定 Wrangler 部署 account |
+| `CLOUDFLARE_API_TOKEN` | 是 | 允许 CI 调用 Cloudflare API |
 
-缺失时 workflow 仍执行 install → type-check → test，跳过 deploy。
+API token 最小权限：
 
-在 Cloudflare Dashboard 创建 API Token：
+| 权限 | Scope | 用途 |
+| --- | --- | --- |
+| Workers Scripts Write | Account | 部署 Worker |
+| Workers KV Storage Write | Account | 创建、复用或读取 KV namespace |
 
-```
-Account → API Tokens → Create Token → Custom
-  → Edit Cloudflare Workers (Workers Scripts Write — Account)
-  → Workers KV Storage Edit (Workers KV Storage Write — Account)
-```
+缺少其中任意一个 secret 时，`.github/workflows/deploy.yml` 会完成 install、type-check、test，然后跳过部署。
 
-## Step 5. 部署 Worker
+## 6. 部署 Worker
+
+本地：
 
 ```bash
+pnpm cf:config-check
 pnpm deploy
-# 或 GitHub Actions: push to main / 手动触发 Deploy Worker workflow
 ```
 
-## Step 6. 绑定 KIRARI Pages Service Binding
+CI：
+
+```text
+push to main
+  -> Deploy Worker workflow
+  -> install
+  -> type-check
+  -> test
+  -> cf:prepare-config
+  -> cf:config-check
+  -> wrangler deploy
+```
+
+## 7. 添加 KIRARI Pages Service Binding
+
+Cloudflare Dashboard：
+
+```text
+Workers & Pages
+  -> KIRARI Pages project
+  -> Settings
+  -> Bindings
+  -> Add binding
+  -> Service binding
+```
+
+字段：
 
 | 字段 | 值 |
-|------|----|
-| Type | Service binding |
+| --- | --- |
 | Variable name | `GHCARD_CACHE` |
 | Service | `kirari-ghcard-cache` |
 
-Dashboard 路径：`Workers & Pages → KIRARI Pages 项目 → Settings → Bindings → Add binding → Service binding`
-
-## Step 7. KIRARI 配置
+## 8. 配置 KIRARI
 
 ```toml
 [githubCard]
@@ -123,41 +202,39 @@ route = "/ghc"
 serviceBinding = "GHCARD_CACHE"
 ```
 
-KIRARI 本身不需要 `GITHUB_TOKEN`。GitHub token 属于本 Worker，配置为 Cloudflare Worker Secret。
+KIRARI 构建时应生成 `functions/ghc/[[path]].ts`。该 Pages Function 会向 Worker 发送 `X-KIRARI-GHC-PUBLIC-BASE`，让 repo JSON 中的 `owner.avatar_url` 改写成同源 `/ghc/avatar/...`。
 
-## Step 8. 验证
+## 9. 验证
 
-| 检查项 | 预期 |
-|--------|------|
-| `/ghc/repos/owner/repo` | 返回 repo JSON（`owner.avatar_url` 已改写） |
-| `/ghc/avatar/owner?size=96` | 返回头像图片 |
-| Browser Network | 无 `api.github.com` 请求 |
-| Browser Network | 无 `github.com/*.png` 请求 |
-| 响应 header | 存在 `X-Cache` |
-| Worker 公开 URL | `*.workers.dev` 不作为生产入口 |
+```bash
+curl -i https://YOUR_KIRARI_SITE/ghc/healthz
+curl -i https://YOUR_KIRARI_SITE/ghc/repos/saicaca/fuwari
+curl -I https://YOUR_KIRARI_SITE/ghc/avatar/saicaca?size=96
+```
 
-## 可选变量
+预期：
 
-| 变量 | 位置 | 示例 | 用途 |
-|------|------|------|------|
-| `ALLOWED_ORIGINS` | vars / Worker env | `https://ex.com,http://localhost:4321` | CORS 白名单 |
-| `PUBLIC_BASE_URL` | vars / Worker env | `https://ex.com/ghc` | Cron prewarm avatar URL 改写 |
-| `PREWARM_TARGETS` | vars / Worker env | `repo:owner/repo,avatar:owner` | Cron 预热 target 列表 |
-| `CACHE_NAMESPACE_VERSION` | vars / Worker env | `v2` | 缓存 key 版本（递增批量失效） |
+| 检查 | 结果 |
+| --- | --- |
+| `/ghc/healthz` | `{"ok":true,"service":"kirari-ghcard-cache"}` |
+| repo JSON | `owner.avatar_url` 指向 `/ghc/avatar/...` |
+| 响应 header | 有 `X-Cache` 和 `X-Cache-Key` |
+| 浏览器 Network | KIRARI card 不直连 `api.github.com` |
+| Worker 公开地址 | 不作为生产入口 |
 
-## 免费版边界
+## 常见失败
 
-| 不需要 | |
-|--------|---|
-| Worker custom domain | ❌ |
-| Cloudflare 付费 WAF / Rate Limiting | ❌ |
-| Durable Objects / D1 / R2 / Queues | ❌ |
-| Workers Paid plan | ❌ |
+| 现象 | 原因 | 修复 |
+| --- | --- | --- |
+| `wrangler deploy` 报 KV id 无效 | `wrangler.jsonc` 仍是 `<production-kv-id>` | 运行 `pnpm cf:prepare-config` 或手动填入 KV id |
+| `/ghc/*` 返回 binding 错误 | KIRARI Pages 未添加 Service Binding 或名称不一致 | 添加 `GHCARD_CACHE` |
+| 浏览器请求返回 403 | `ALLOWED_ORIGINS` 未包含当前站点 origin | 设置 `ALLOWED_ORIGINS=https://YOUR_KIRARI_SITE` |
+| repo JSON 中头像仍是 GitHub URL | KIRARI generated route 没有传 `X-KIRARI-GHC-PUBLIC-BASE` | 检查 KIRARI adapter 生成文件和构建版本 |
+| GitHub rate limit | 未配置或 token 无效 | 重新执行 `pnpm wrangler secret put GITHUB_TOKEN` |
 
----
+## 相关文档
 
-**官方参考**：
-- [Cloudflare Workers GitHub Actions](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)
-- [Cloudflare API Token 权限](https://developers.cloudflare.com/fundamentals/api/reference/permissions/)
-- [Workers KV 限制](https://developers.cloudflare.com/kv/platform/limits/)
-- [Deploy to Cloudflare 按钮](https://developers.cloudflare.com/changelog/2025-04-08-deploy-to-cloudflare-button/)
+- [部署入口](DEPLOYMENT.md)
+- [KIRARI 对接](KIRARI_INTEGRATION.md)
+- [架构与缓存流程](ARCHITECTURE.md)
+- [运维指南](OPERATIONS.md)

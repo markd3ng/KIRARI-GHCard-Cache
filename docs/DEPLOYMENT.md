@@ -1,60 +1,126 @@
 # 部署入口
 
-先根据 KIRARI 托管平台选择路径，再阅读对应平台文档。
+这份文档用来决定走 Cloudflare、Vercel 还是直连 GitHub。确定平台后，再进入对应的详细部署文档。
 
 ## 平台选择
 
-| KIRARI 托管 | 推荐 | 缓存 | 文档 |
-|------------|------|------|------|
-| Cloudflare Pages | 私有 Worker + Service Binding | Cache API + KV + stale | [Cloudflare 部署](CLOUDFLARE_DEPLOYMENT.md) |
-| Vercel | 同项目 Vercel Function | HTTP Cache + 可选 Runtime Cache | [Vercel 部署](VERCEL_DEPLOYMENT.md) |
-| 纯静态（无运行时 route） | 不启用 adapter，直连 GitHub | 无缓存 | [KIRARI 对接](KIRARI_INTEGRATION.md) |
+| KIRARI 托管方式 | 推荐方案 | 你会得到什么 | 详细文档 |
+| --- | --- | --- | --- |
+| Cloudflare Pages | 私有 Worker + Pages Service Binding | 同源 `/ghc/*`、Cache API + Workers KV、GitHub 故障时持久 stale fallback | [Cloudflare 部署](CLOUDFLARE_DEPLOYMENT.md) |
+| Vercel | 同项目 Function | 同源 `/ghc/*`、HTTP cache、可选 Runtime Cache | [Vercel 部署](VERCEL_DEPLOYMENT.md) |
+| 纯静态托管 | 不启用 adapter | 直连 `https://api.github.com`，无缓存代理 | [KIRARI 对接](KIRARI_INTEGRATION.md) |
 
-## 变量归属总表
+Cloudflare 是生产首选，因为 KV 可以保留 stale 数据。Vercel 路径更轻，适合 KIRARI 已经部署在 Vercel 的场景。
 
-| 变量 | 属于 | 配置位置 | 不要配置在 |
-|------|------|----------|-----------|
-| `GITHUB_TOKEN` | 缓存代理运行时 | Cloudflare Worker Secret / Vercel Env | GitHub Actions YAML、`kirari.config.toml`、任何仓库文件 |
-| `CLOUDFLARE_ACCOUNT_ID` | GitHub Actions CI | GitHub Repository Secrets | Worker Secret、Vercel、KIRARI |
-| `CLOUDFLARE_API_TOKEN` | GitHub Actions CI | GitHub Repository Secrets | Worker Secret、Vercel、KIRARI |
-| `VERCEL_TOKEN` | GitHub Actions CI | GitHub Repository Secrets | Cloudflare、KIRARI |
-| `ALLOWED_ORIGINS` | Cloudflare Worker | `wrangler.jsonc` vars / Worker env | KIRARI 配置 |
-| `GHC_ALLOWED_ORIGINS` | Vercel Function | Vercel Project Env | Cloudflare |
-| `PUBLIC_BASE_URL` | Cloudflare cron prewarm | `wrangler.jsonc` vars | KIRARI 配置 |
-| `PREWARM_TARGETS` | Cloudflare cron prewarm | `wrangler.jsonc` vars | KIRARI 配置 |
+## 请求路径
 
-## CI 权限（Cloudflare 路径）
+```text
+KIRARI card
+  -> /ghc/repos/:owner/:repo
+  -> /ghc/repos/:owner/:repo/contents/:path
+  -> /ghc/repos/:owner/:repo/commits?path=:path
+  -> /ghc/avatar/:owner?size=96
+```
 
-容易混淆的两个 token：
+Cloudflare 和 Vercel 对 KIRARI 都暴露 `/ghc/*`。内部实现不同：
 
-| Token | 所属上下文 | 用途 |
-|-------|-----------|------|
-| `GITHUB_TOKEN` | Worker 运行时 | Worker 请求 GitHub API |
-| `CLOUDFLARE_API_TOKEN` | GitHub Actions CI | CI 中的 Wrangler 部署 Worker |
+| 平台 | 内部入口 |
+| --- | --- |
+| Cloudflare | KIRARI Pages Function 通过 Service Binding 调用 Worker `/api/github/*` |
+| Vercel | `vercel.json` 把 `/ghc/*` rewrite 到 `/api/ghc/*`，Function 内部再映射到 `/api/github/*` |
 
-`CLOUDFLARE_API_TOKEN` 所需权限：
+## 变量归属
 
-| 场景 | API 权限（reference 名称） | Scope | 必需 |
-|------|---------------------------|-------|------|
-| `wrangler deploy` | Workers Scripts Write | Account | ✅ |
-| 自动创建/复用 KV namespace | Workers KV Storage Write | Account | ✅ |
-| 管理 Worker route / custom domain | Workers Routes Write | Zone | 可选 |
+| 名称 | 属于 | 配置位置 | 不要配置在 |
+| --- | --- | --- | --- |
+| `GITHUB_TOKEN` | 缓存代理运行时 | Cloudflare Worker Secret / Vercel Environment Variables | `kirari.config.toml`、GitHub Actions YAML、仓库文件 |
+| `ALLOWED_ORIGINS` | Cloudflare Worker CORS | `wrangler.jsonc` vars 或 Worker env | KIRARI 配置 |
+| `GHC_ALLOWED_ORIGINS` | Vercel Function CORS | Vercel Environment Variables | Cloudflare |
+| `CACHE_NAMESPACE_VERSION` | 缓存 key 版本 | Worker vars / Vercel env | KIRARI 配置 |
+| `PUBLIC_BASE_URL` | Cloudflare Cron prewarm | Worker vars | KIRARI 配置 |
+| `PREWARM_TARGETS` | Cloudflare Cron prewarm | Worker vars | KIRARI 配置 |
+| `CLOUDFLARE_ACCOUNT_ID` | CI 部署 | GitHub Repository Secrets | Worker Secret、Vercel |
+| `CLOUDFLARE_API_TOKEN` | CI 部署 | GitHub Repository Secrets | Worker Secret、Vercel |
+| `VERCEL_TOKEN` | CI 部署 | GitHub Repository Secrets | Cloudflare、KIRARI |
 
-> 默认私有 Service Binding 方案**不需要** zone-level route 和 Worker custom domain。
+## Token 区分
+
+| Token | 用途 | 什么时候需要 |
+| --- | --- | --- |
+| `GITHUB_TOKEN` | 运行时请求 GitHub REST API，把匿名 60 req/h 提升到 token rate limit | 生产推荐 |
+| `CLOUDFLARE_API_TOKEN` | GitHub Actions / Wrangler 部署 Worker 和管理 KV namespace | Cloudflare CI 部署需要 |
+| `VERCEL_TOKEN` | GitHub Actions 调用 Vercel CLI 部署 | Vercel CI 部署需要 |
+
+`GITHUB_TOKEN` 不用于 avatar 请求。头像走 `https://github.com/:owner.png` 公开图片地址，只经过缓存代理缓存图片。
+
+## CORS 默认行为
+
+代码会读取 allowlist：
+
+| 平台 | 读取变量 |
+| --- | --- |
+| Cloudflare | `ALLOWED_ORIGINS` |
+| Vercel | `GHC_ALLOWED_ORIGINS`，未设时回退 `ALLOWED_ORIGINS` |
+
+行为：
+
+| 配置 | 无 `Origin` 请求 | 带 `Origin` 且命中白名单 | 带 `Origin` 且未命中 |
+| --- | --- | --- | --- |
+| 空 allowlist | 允许 | 不适用 | 403 |
+| 非空 allowlist | 允许 | 允许并回显 `Access-Control-Allow-Origin` | 403 |
+
+生产站点建议配置为 KIRARI 站点 origin，例如：
+
+```text
+https://blog.example.com,http://localhost:4321
+```
+
+## CI 权限
+
+Cloudflare CI 至少需要：
+
+| 权限 | Scope | 用途 |
+| --- | --- | --- |
+| Workers Scripts Write | Account | `wrangler deploy` |
+| Workers KV Storage Write | Account | `pnpm cf:prepare-config` 创建或复用 `GITHUB_CACHE` |
+
+默认私有 Service Binding 方案不需要 Worker route 或 custom domain 权限。
 
 ## 验证命令
 
-```bash
-# Cloudflare 路径
-pnpm install
-pnpm cf:types && pnpm cf:config-check && pnpm type-check && pnpm test && pnpm deploy:dry
+Cloudflare:
 
-# Vercel 路径
-pnpm install && pnpm type-check && pnpm test
+```bash
+pnpm install
+pnpm cf:types
+pnpm cf:prepare-config
+pnpm cf:config-check
+pnpm type-check
+pnpm test
+pnpm deploy:dry
 ```
 
-## 官方参考
+Vercel:
 
-- [Cloudflare Workers GitHub Actions](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)
-- [Cloudflare API Token 权限](https://developers.cloudflare.com/fundamentals/api/reference/permissions/)
-- [Vercel Rewrites](https://vercel.com/docs/routing/rewrites)
+```bash
+pnpm install
+pnpm type-check
+pnpm test
+```
+
+部署后：
+
+```bash
+curl -i https://YOUR_SITE.example/ghc/healthz
+curl -i https://YOUR_SITE.example/ghc/repos/saicaca/fuwari
+curl -I https://YOUR_SITE.example/ghc/avatar/saicaca?size=96
+```
+
+`/ghc/healthz` 返回 `ok: true`，业务接口响应有 `X-Cache`，浏览器 Network 中不再直连 `api.github.com`，才算接入完成。
+
+## 下一步
+
+- Cloudflare 路径：[Cloudflare 部署](CLOUDFLARE_DEPLOYMENT.md)
+- Vercel 路径：[Vercel 部署](VERCEL_DEPLOYMENT.md)
+- KIRARI 配置：[KIRARI 对接](KIRARI_INTEGRATION.md)
+- 排障与回滚：[运维指南](OPERATIONS.md)
